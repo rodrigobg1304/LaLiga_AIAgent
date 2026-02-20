@@ -141,53 +141,89 @@ def get_team_stats(team: str, stat_name: str, year: Optional[str] = None) -> lis
     return run_query(sql, tuple(params))
 
 
-def get_standings(league: str, year: int) -> list[dict]:
+def get_standings(year: str) -> list[dict]:
     """Clasificación calculada desde los partidos."""
     sql = f"""
-        SELECT
+        SELECT 
             team,
-            COUNT(*) AS played,
-            SUM(win) AS wins,
-            SUM(draw) AS draws,
-            SUM(loss) AS losses,
+            Count(*) AS played,
             SUM(gf) AS goals_for,
             SUM(ga) AS goals_against,
             SUM(gf) - SUM(ga) AS goal_diff,
-            SUM(win)*3 + SUM(draw) AS points
+            SUM(CASE WHEN gf > ga THEN 1 ELSE 0 END) AS wins,
+            SUM(CASE WHEN gf = ga THEN 1 ELSE 0 END) AS draws,
+            SUM(CASE WHEN gf < ga THEN 1 ELSE 0 END) AS losses,
+            SUM(CASE WHEN gf > ga THEN 3 WHEN gf = ga THEN 1 ELSE 0 END) AS points
         FROM (
-            SELECT homeTeam AS team,
-                   CAST(homeValue AS DECIMAL) AS gf,
-                   CAST(awayValue AS DECIMAL) AS ga,
-                   CASE WHEN CAST(homeValue AS DECIMAL) > CAST(awayValue AS DECIMAL) THEN 1 ELSE 0 END AS win,
-                   CASE WHEN CAST(homeValue AS DECIMAL) = CAST(awayValue AS DECIMAL) THEN 1 ELSE 0 END AS draw,
-                   CASE WHEN CAST(homeValue AS DECIMAL) < CAST(awayValue AS DECIMAL) THEN 1 ELSE 0 END AS loss
-            FROM {TABLE} WHERE name='goals' AND league=%s AND year=%s
+            SELECT 
+                homeTeam AS team,
+                matchId,
+                SUM(CAST(homeValue AS SIGNED)) AS gf,
+                SUM(CAST(awayValue AS SIGNED)) AS ga
+            FROM {TABLE}
+            WHERE name = 'Goals' AND Year = %s
+            GROUP BY homeTeam, matchId
+        
             UNION ALL
-            SELECT awayTeam,
-                   CAST(awayValue AS DECIMAL),
-                   CAST(homeValue AS DECIMAL),
-                   CASE WHEN CAST(awayValue AS DECIMAL) > CAST(homeValue AS DECIMAL) THEN 1 ELSE 0 END,
-                   CASE WHEN CAST(awayValue AS DECIMAL) = CAST(homeValue AS DECIMAL) THEN 1 ELSE 0 END,
-                   CASE WHEN CAST(awayValue AS DECIMAL) < CAST(homeValue AS DECIMAL) THEN 1 ELSE 0 END
-            FROM {TABLE} WHERE name='goals' AND league=%s AND year=%s
-        ) t
+        
+            SELECT 
+                awayTeam AS team,
+                matchId,
+                SUM(CAST(awayValue AS SIGNED)) AS gf,
+                SUM(CAST(homeValue AS SIGNED)) AS ga
+            FROM {TABLE}
+            WHERE name = 'Goals' AND Year = %s
+            GROUP BY awayTeam, matchId
+        ) AS match_totals
         GROUP BY team
-        ORDER BY points DESC, goal_diff DESC
+        ORDER BY points DESC, goals_for - goals_against DESC
     """
-    return run_query(sql, (league, year, league, year))
+    params = [year, year]
+    return run_query(sql, tuple(params))
 
 
-def get_top_stats(stat_name: str, league: str, year: int, top_n: int = 10) -> list[dict]:
+def get_top_stats(stat_name: str, year: str, top_n: int = 10) -> list[dict]:
     """Ranking de equipos por una estadística (ej: possession, shots...)."""
     sql = f"""
-        SELECT homeTeam AS team, AVG(CAST(homeValue AS DECIMAL)) AS avg_stat
-        FROM {TABLE}
-        WHERE name=%s AND period='ALL' AND league=%s AND year=%s
-        GROUP BY homeTeam
-        ORDER BY avg_stat DESC
+        SELECT 
+            team,
+            SUM(CASE WHEN location = 'H' THEN gf ELSE 0 END) AS sum_stat_home_for,
+            SUM(CASE WHEN location = 'H' THEN ga ELSE 0 END) AS sum_stat_home_against,
+            AVG(CASE WHEN location = 'H' THEN gf END)        AS avg_stat_home_for,
+            AVG(CASE WHEN location = 'H' THEN ga END)        AS avg_stat_home_against,
+            SUM(CASE WHEN location = 'A' THEN gf ELSE 0 END) AS sum_stat_away_for,
+            SUM(CASE WHEN location = 'A' THEN ga ELSE 0 END) AS sum_stat_away_against,
+            AVG(CASE WHEN location = 'A' THEN gf END)        AS avg_stat_away_for,
+            AVG(CASE WHEN location = 'A' THEN ga END)        AS avg_stat_away_against
+        FROM (
+            SELECT 
+                homeTeam AS team,
+                'H' as location,
+                matchId,
+                SUM(CAST(homeValue AS SIGNED)) AS gf,
+                SUM(CAST(awayValue AS SIGNED)) AS ga
+            FROM {TABLE}
+            WHERE name = %s AND Year = %s
+            GROUP BY homeTeam, matchId, location
+        
+            UNION ALL
+        
+            SELECT 
+                awayTeam AS team,
+                'A' as location,
+                matchId,
+                SUM(CAST(awayValue AS SIGNED)) AS gf,
+                SUM(CAST(homeValue AS SIGNED)) AS ga
+            FROM {TABLE}
+            WHERE name = %s AND Year = %s
+            GROUP BY awayTeam, matchId, location
+        ) AS match_totals
+        GROUP BY team
+        ORDER BY avg_stat_home_for DESC
         LIMIT %s
     """
-    return run_query(sql, (stat_name, league, year, top_n))
+    params = [stat_name, year, stat_name, year, top_n]
+    return run_query(sql, params=tuple(params))
 
 if __name__ == '__main__':
     team_test = "real-betis"

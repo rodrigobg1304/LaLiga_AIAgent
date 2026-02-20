@@ -163,15 +163,6 @@ def format_results(data: list[dict], team: str) -> str | list[dict]:
         else:
             lines.append(f" | {str(rnd).center(7)} | {match_str.center(50)} | [{score}] {marker} |")
 
-            total = wins + draws + losses
-            pts   = wins * 3 + draws
-            lines += [
-                f"{'─'*80}",
-                f"  PJ:{total}  W:{wins} (H:{home_wins}, A:{away_wins})  D:{draws} (H:{home_draws}, A:{away_draws})  "
-                f"L:{losses} (H:{home_losses}, A:{away_losses}) Pts:{pts}",
-                f"{'─'*80}\n"
-            ]
-
     if is_api():
         season_resume = []
         for s, m in array_t.items():
@@ -203,13 +194,33 @@ def format_results(data: list[dict], team: str) -> str | list[dict]:
             })
         return season_resume
     else:
+        total = wins + draws + losses
+        pts = wins * 3 + draws
+
+        lines += [
+            f"{'─' * 80}",
+            f"  PJ:{total}  W:{wins} (H:{home_wins}, A:{away_wins})  D:{draws} (H:{home_draws}, A:{away_draws})  "
+            f"L:{losses} (H:{home_losses}, A:{away_losses}) Pts:{pts}",
+            f"{'─' * 80}\n"
+        ]
         return "\n".join(lines)
 
 
-def format_goals(data: list[dict], team: str) -> list[dict]:
+def format_goals(data: list[dict], team: str) -> str | list[dict]:
     if not data or not data[0]:
         return [{"msg": "No se encontraron datos de goles."}]
+
     array_t = []
+    separator = f" +{'-' * 17}+{'-' * 8}+{'-' * 20}+{'-' * 22}+{'-' * 12}+"
+    lines = [
+        f"\n{'─' * 55}",
+        f"  GOLES — {team.upper()}",
+        f"{'─' * 55}",
+        separator,
+        f" | {'TEAM'.center(15)} | {'SEASON'.center(6)} | {'Total Goals Scored'.center(18)} | {'Total Goals Conceded'.center(20)} | {'Total Diff'.center(10)} |",
+        separator,
+    ]
+
     for d in data:
         row = d
         season = row['year']
@@ -225,6 +236,13 @@ def format_goals(data: list[dict], team: str) -> list[dict]:
         sign      = "+" if diff >= 0 else ""
         home_sign = "+" if home_diff >= 0 else ""
         away_sign = "+" if away_diff >= 0 else ""
+
+        diff_str = f"{sign}{diff}"
+
+        lines.append(
+            f" | {team.center(15)} | {str(season).center(6)} | {str(scored).center(18)} | {str(conceded).center(20)} | {diff_str.center(10)} |")
+        lines.append(separator)
+
         array_season = {
             "team": team,
             "year": season,
@@ -240,7 +258,10 @@ def format_goals(data: list[dict], team: str) -> list[dict]:
             }
         array_t.append(array_season)
 
-    return array_t
+    if is_api():
+        return array_t
+    else:
+        return "\n".join(lines)
 
 
 def format_stat(data: list[dict], team: str, stat: str) -> str | list[dict]:
@@ -249,7 +270,6 @@ def format_stat(data: list[dict], team: str, stat: str) -> str | list[dict]:
 
     lines = [f"\n📊 {stat.upper()} — {team.upper()}", f"{'─'*50}"]
     values = []
-    avg = 0
     array_t = {}
     for row in data:
         season = row.get("Year")
@@ -284,12 +304,12 @@ def format_stat(data: list[dict], team: str, stat: str) -> str | list[dict]:
         return "\n".join(lines)
 
 
-def format_standings(data: list[dict], league: str, year: int) -> str:
+def format_standings(data: list[dict], year: str) -> str | list[dict]:
     if not data:
         return "No se encontraron datos de clasificación."
-
+    array_t = []
     lines = [
-        f"\n🏆 CLASIFICACIÓN — {league.upper()} {year}",
+        f"\n🏆 CLASIFICACIÓN — {year}",
         f"{'─'*65}",
         f"  {'#':>2}  {'Equipo':<28} PJ   V   E   D   GF  GA  DIF  PTS",
         f"{'─'*65}"
@@ -301,18 +321,72 @@ def format_standings(data: list[dict], league: str, year: int) -> str:
             f"{int(row['losses']):>2}  {int(row['goals_for']):>3} {int(row['goals_against']):>3}  "
             f"{int(row['goal_diff']):>+4}  {int(row['points']):>3}"
         )
+        array_s = {
+            "classification": i,
+            "team": row["team"],
+            "played": row["played"],
+            "wins": row["wins"],
+            "draws": row["draws"],
+            "losses": row["losses"],
+            "goals_for": row["goals_for"],
+            "goals_against": row["goals_against"],
+            "goal_diff": row["goal_diff"],
+            "points": row["points"]
+        }
+        array_t.append(array_s)
     lines.append(f"{'─'*65}\n")
-    return "\n".join(lines)
+
+    if is_api():
+        return array_t
+    else:
+        return "\n".join(lines)
 
 
-def format_top_stats(data: list[dict], stat: str) -> str:
+def format_top_stats(data: list[dict], stat: str) -> str | list[dict]:
     if not data:
         return "No se encontraron datos."
-    lines = [f"\n🔝 RANKING — {stat.upper()}", f"{'─'*45}"]
+    col_w = 9  # ancho de cada columna de stats
+    team_w = 30
+    array_t = []
+    separator = f" +{'─' * 4}+{'─' * (team_w + 2)}+{'─' * (col_w * 5 + 2)}+{'─' * (col_w * 5 + 2)}+"
+    lines = [
+        f"\n🔝 RANKING — {stat.upper()}",
+        separator,
+        f" | {'#':^2} | {'TEAM':^{team_w}} | {'── HOME ──':^{col_w * 5 }} | {'── AWAY ──':^{col_w * 5 }} |",
+        f" | {'':^2} | {'':^{team_w}} | {'SUM FOR':^{col_w}} | {'SUM AG':^{col_w}} | {'AVG FOR':^{col_w}} | {'AVG AG':^{col_w}} | {'SUM FOR':^{col_w}} | {'SUM AG':^{col_w}} | {'AVG FOR':^{col_w}} | {'AVG AG':^{col_w}} |",
+        separator,
+    ]
     for i, row in enumerate(data, 1):
-        lines.append(f"  {i:>2}. {row['team']:<30} {float(row['avg_stat']):>7.2f}")
-    lines.append(f"{'─'*45}\n")
-    return "\n".join(lines)
+        lines.append(
+            f" | {i:>2} | {row['team']:<{team_w}} "
+            f"| {float(row['sum_stat_home_for']):^{col_w}.2f} "
+            f"| {float(row['sum_stat_home_against']):^{col_w}.2f} "
+            f"| {float(row['avg_stat_home_for']):^{col_w}.2f} "
+            f"| {float(row['avg_stat_home_against']):^{col_w}.2f} "
+            f"| {float(row['sum_stat_away_for']):^{col_w}.2f} "
+            f"| {float(row['sum_stat_away_against']):^{col_w}.2f} "
+            f"| {float(row['avg_stat_away_for']):^{col_w}.2f} "
+            f"| {float(row['avg_stat_away_against']):^{col_w}.2f} |"
+        )
+        lines.append(separator)
+        array_s = {
+            "ranking": i,
+            "team": row["team"],
+            "sum_stat_home_for": row["sum_stat_home_for"],
+            "sum_stat_home_against": row["sum_stat_home_against"],
+            "avg_stat_home_for": row["avg_stat_home_for"],
+            "avg_stat_home_against": row["avg_stat_home_against"],
+            "sum_stat_away_for": row["sum_stat_away_for"],
+            "sum_stat_away_against": row["sum_stat_away_against"],
+            "avg_stat_away_for": row["avg_stat_away_for"],
+            "avg_stat_away_against": row["avg_stat_away_against"]
+        }
+        array_t.append(array_s)
+
+    if is_api():
+        return array_t
+    else:
+        return "\n".join(lines)
 
 
 # ─────────────────────────────────────────────
@@ -338,12 +412,12 @@ def run_case(handler: str, team: str = None, league: str = None,
         return {"text": format_stat(data, team, stat), "data": data, "handler": handler}
 
     elif handler == "standings":
-        data = get_standings(league, year)
-        return {"text": format_standings(data, league, year), "data": data, "handler": handler}
+        data = get_standings(year=year)
+        return {"text": format_standings(data, year), "data": data, "handler": handler}
 
     elif handler == "top_stats":
-        stat = stat or "goals"
-        data = get_top_stats(stat, league, year, top_n)
+        stat = stat or "Goals"
+        data = get_top_stats(stat, year, top_n)
         return {"text": format_top_stats(data, stat), "data": data, "handler": handler}
 
     elif handler == "full_report":

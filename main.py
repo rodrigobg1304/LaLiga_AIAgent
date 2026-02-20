@@ -11,6 +11,7 @@ import sys
 from pprint import pprint
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
+from contextlib import asynccontextmanager
 from enum import Enum
 from pydantic import BaseModel, Field
 from typing import Optional, Annotated
@@ -19,8 +20,13 @@ import db
 from agent import MENU_CASES, AVAILABLE_STATS, detect_intent, extract_year, extract_stat, run_case
 from exporter import export_to_excel, export_multi_sheet
 
-app = FastAPI(title="Football Analytics Agent", version="1.0")
-os.environ["RUNTIME"] = "api"
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    os.environ["RUNTIME"] = "api"  # solo se ejecuta con uvicorn
+    yield
+    os.environ.pop("RUNTIME", None)  # limpieza al parar
+
+app = FastAPI(title="Football Analytics Agent", version="1.0", lifespan=lifespan)
 
 
 def make_enum(name: str, values: list[str]) -> Enum:
