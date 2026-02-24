@@ -7,4 +7,5 @@
     Llama a la tool más apropiada con los parámetros extraídos de la pregunta.
   expected_output: >
     Respuesta estructurada en español con los datos reales obtenidos de la base de datos.
+    Las tablas que muestres deben estar bien formateadas, como si fuera para un markdown.
   agent: football_analyst

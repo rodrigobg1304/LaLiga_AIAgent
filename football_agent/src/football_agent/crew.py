@@ -1,6 +1,6 @@
 from crewai import Agent, Crew, Process, Task
 from crewai.project import CrewBase, agent, crew, task
-from football_agent.tools.tools import team_results_tool, goals_tool, stat_tool, standings_tool
+from football_agent.tools.tools import team_results_tool, goals_tool, stat_tool, standings_tool, prediction_tool
 
 
 @CrewBase
@@ -14,7 +14,7 @@ class FootballAgent:
     def football_analyst(self) -> Agent:
         return Agent(
             config=self.agents_config["football_analyst"],
-            tools=[team_results_tool, goals_tool, stat_tool, standings_tool],
+            tools=[team_results_tool, goals_tool, stat_tool, standings_tool, prediction_tool],
             verbose=True,
             allow_delegation=False
         )

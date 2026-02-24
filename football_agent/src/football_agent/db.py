@@ -31,6 +31,7 @@ def run_query(sql: str, params: tuple = ()) -> list[dict]:
     conn = get_connection()
     try:
         cur = conn.cursor(dictionary=True) if DB_TYPE == "mysql" else conn.cursor()
+        cur.execute("SET SESSION sql_mode = ''")
         cur.execute(sql, params)
         rows = cur.fetchall()
         return rows

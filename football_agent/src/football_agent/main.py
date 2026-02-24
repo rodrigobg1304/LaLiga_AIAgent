@@ -1,5 +1,8 @@
 from football_agent.crew import FootballAgent
+from dotenv import load_dotenv
+import os
 
+load_dotenv(os.path.join(os.path.dirname(__file__), "../../.env"))
 
 def run():
     while True:

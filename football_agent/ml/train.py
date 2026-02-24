@@ -6,11 +6,17 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
 from sklearn.metrics import accuracy_score, classification_report
 from imblearn.over_sampling import SMOTE
+from sklearn.utils.class_weight import compute_sample_weight
 import sys
 import os
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "../src"))
 from football_agent.db import run_query, TABLE
+
+# ─────────────────────────────────────────────
+# 0. DEFINIR VARIABLES
+# ─────────────────────────────────────────────
+OVER_THRESHOLDS = [0.5, 1.5, 2.5, 3.5]
 
 # ─────────────────────────────────────────────
 # 1. EXTRAER DATOS
@@ -58,11 +64,15 @@ def build_wide_format(df: pd.DataFrame) -> pd.DataFrame:
     # Calcular resultado
     wide["home_goals"] = wide.get("Goals_homeValue", 0)
     wide["away_goals"] = wide.get("Goals_awayValue", 0)
+    wide["total_goals"] = wide["home_goals"] + wide["away_goals"]
     wide["resultado"]  = np.where(
         wide["home_goals"] > wide["away_goals"], "1",
         np.where(wide["home_goals"] < wide["away_goals"], "2", "X")
     )
-    wide["over_2_5"] = ((wide["home_goals"] + wide["away_goals"]) > 2.5).astype(int)
+    # Over/Under para cada threshold
+    for t in OVER_THRESHOLDS:
+        col = f"over_{str(t).replace('.', '_')}"
+        wide[col] = (wide["total_goals"] > t).astype(int)
 
     return wide
 
@@ -71,7 +81,7 @@ def build_wide_format(df: pd.DataFrame) -> pd.DataFrame:
 # 2. FEATURE ENGINEERING
 # ─────────────────────────────────────────────
 
-def compute_team_rolling_avg(wide: pd.DataFrame, n: int = 10) -> pd.DataFrame:
+def compute_team_rolling_avg(wide: pd.DataFrame, n: int = 5) -> pd.DataFrame:
     """
     Para cada partido calcula la media de las últimas N jornadas
     de cada equipo como features del modelo.
@@ -85,25 +95,25 @@ def compute_team_rolling_avg(wide: pd.DataFrame, n: int = 10) -> pd.DataFrame:
         year = row["Year"]
         rnd  = row["Round"]
 
-        # ── Partidos anteriores local (como local) ──
+        # ── Partidos anteriores como local ──
         home_prev = wide[
             (wide["homeTeam"] == home) &
             ((wide["Year"] < year) | ((wide["Year"] == year) & (wide["Round"] < rnd)))
         ].tail(n)
 
-        # ── Partidos anteriores visitante (como visitante) ──
+        # ── Partidos anteriores como visitante ──
         away_prev = wide[
             (wide["awayTeam"] == away) &
             ((wide["Year"] < year) | ((wide["Year"] == year) & (wide["Round"] < rnd)))
         ].tail(n)
 
-        # ── Partidos anteriores local (cualquier condición) ──
+        # ── Partidos anteriores equipo local (en casa o fuera) ──
         home_all = wide[
             ((wide["homeTeam"] == home) | (wide["awayTeam"] == home)) &
             ((wide["Year"] < year) | ((wide["Year"] == year) & (wide["Round"] < rnd)))
         ].tail(n)
 
-        # ── Partidos anteriores visitante (cualquier condición) ──
+        # ── Partidos anteriores equipo visitante (en casa o fuera) ──
         away_all = wide[
             ((wide["homeTeam"] == away) | (wide["awayTeam"] == away)) &
             ((wide["Year"] < year) | ((wide["Year"] == year) & (wide["Round"] < rnd)))
@@ -125,8 +135,71 @@ def compute_team_rolling_avg(wide: pd.DataFrame, n: int = 10) -> pd.DataFrame:
             "year":      year,
             "round":     rnd,
             "resultado": row["resultado"],
-            "over_2_5":  row["over_2_5"],
+            "over_0_5": row["over_0_5"],
+            "over_1_5": row["over_1_5"],
+            "over_2_5": row["over_2_5"],
+            "over_3_5": row["over_3_5"],
         }
+
+        # ── Features Over 2.5 ──
+        # Media de goles marcados + encajados por partido (últimos N)
+        home_goals_scored = home_prev["home_goals"].mean() if len(home_prev) > 0 else 0
+        home_goals_conceded = home_prev["away_goals"].mean() if len(home_prev) > 0 else 0
+        away_goals_scored = away_prev["away_goals"].mean() if len(away_prev) > 0 else 0
+        away_goals_conceded = away_prev["home_goals"].mean() if len(away_prev) > 0 else 0
+
+        record["home_avg_goals_scored"] = home_goals_scored
+        record["home_avg_goals_conceded"] = home_goals_conceded
+        record["away_avg_goals_scored"] = away_goals_scored
+        record["away_avg_goals_conceded"] = away_goals_conceded
+
+        # Total de goles esperados combinando ataque local vs defensa visitante y viceversa
+        record["xG_match"] = (home_goals_scored + away_goals_conceded +
+                              away_goals_scored + home_goals_conceded) / 2
+
+        # Over rate histórica para cada threshold
+        for t in OVER_THRESHOLDS:
+            col = f"over_{str(t).replace('.', '_')}"
+            if col in home_prev.columns:
+                record[f"home_{col}_rate"] = (home_prev[col] == 1).mean()
+            if col in away_prev.columns:
+                record[f"away_{col}_rate"] = (away_prev[col] == 1).mean()
+            if col in h2h.columns and len(h2h) > 0:
+                record[f"h2h_{col}_rate"] = (h2h[col] == 1).mean()
+            record[f"combined_{col}_rate"] = (record[f"home_{col}_rate"] + record[f"away_{col}_rate"]) / 2
+
+        # xG medio de ambos equipos
+        xg_home_col = "Expected goals_homeValue"
+        xg_away_col = "Expected goals_awayValue"
+        if xg_home_col in home_prev.columns:
+            record["home_avg_xG"] = home_prev[xg_home_col].mean()
+        if xg_away_col in away_prev.columns:
+            record["away_avg_xG"] = away_prev[xg_away_col].mean()
+
+        # xG combinado esperado del partido
+        if xg_home_col in home_prev.columns and xg_away_col in away_prev.columns:
+            record["expected_xG_match"] = (
+                    home_prev[xg_home_col].mean() + away_prev[xg_away_col].mean()
+            )
+
+        # Tiros totales medios (proxy de intensidad ofensiva)
+        shots_home_col = "Total shots_homeValue"
+        shots_away_col = "Total shots_awayValue"
+        if shots_home_col in home_prev.columns:
+            record["home_avg_shots"] = home_prev[shots_home_col].mean()
+        if shots_away_col in away_prev.columns:
+            record["away_avg_shots"] = away_prev[shots_away_col].mean()
+
+        # Big chances medias (calidad de ocasiones)
+        bc_home_col = "Big chances_homeValue"
+        bc_away_col = "Big chances_awayValue"
+        if bc_home_col in home_prev.columns:
+            record["home_avg_big_chances"] = home_prev[bc_home_col].mean()
+        if bc_away_col in away_prev.columns:
+            record["away_avg_big_chances"] = away_prev[bc_away_col].mean()
+
+        # H2H goles medios (historial de partidos entre estos equipos)
+        record["h2h_avg_goals"] = (h2h["home_goals"] + h2h["away_goals"]).mean() if len(h2h) > 0 else 0
 
         # ── Features stats rolling (local y visitante) ──
         for feat in FEATURES:
@@ -275,7 +348,17 @@ def train():
     data = compute_team_rolling_avg(wide)
     data = data.merge(elo_df, on="matchId", how="left")
 
-    feature_cols = [c for c in data.columns if c.startswith("home_avg_") or c.startswith("away_avg_")]
+    feature_cols = [c for c in data.columns if
+                    c.startswith("home_avg_") or
+                    c.startswith("away_avg_") or
+                    c.startswith("home_") or
+                    c.startswith("away_") or
+                    c in ["elo_home", "elo_away", "elo_diff",
+                          "home_form_pts", "away_form_pts",
+                          "h2h_home_wins", "h2h_draws",
+                          "h2h_away_wins", "h2h_avg_goals",
+                          "combined_0_5_rate", "combined_1_5_rate", "combined_2_5_rate", "combined_3_5_rate", 'xG_match',
+                          "expected_xG_match"]]
     X = data[feature_cols].fillna(0)
     # Castear a float por si hay columnas object
     X = X.astype(float)
@@ -287,32 +370,63 @@ def train():
     sm = SMOTE(random_state=42)
     X_balanced, y_balanced = sm.fit_resample(X, y_result)
 
-    X_train, X_test, y_train, y_test = train_test_split(X_balanced, y_balanced, test_size=0.2, random_state=42)
+    X_train, X_test, y_train, y_test = train_test_split(
+        X_balanced, y_balanced, test_size=0.2, random_state=42
+    )
 
-    model_result = XGBClassifier(n_estimators=200, max_depth=4, learning_rate=0.05,
-                                  use_label_encoder=False, scale_pos_weight=3, eval_metric="mlogloss")
+    model_result = XGBClassifier(
+        n_estimators=300,
+        max_depth=5,
+        learning_rate=0.03,
+        subsample=0.8,
+        colsample_bytree=0.8,
+        eval_metric="mlogloss"
+    )
     model_result.fit(X_train, y_train)
     y_pred = model_result.predict(X_test)
     print(f"\n🎯 Resultado — Accuracy: {accuracy_score(y_test, y_pred):.2%}")
     print(classification_report(y_test, y_pred, target_names=le.classes_))
 
-    # ── Modelo 2: Over 2.5 ──
-    y_over = data["over_2_5"]
-    X_train2, X_test2, y_train2, y_test2 = train_test_split(X, y_over, test_size=0.2, random_state=42)
+    # ── Modelo 2: Over/Under por threshold ──
+    over_models = {}
+    for t in OVER_THRESHOLDS:
+        col = f"over_{str(t).replace('.', '_')}"
+        y_over = data[col].astype(int)
 
-    model_over = XGBClassifier(n_estimators=200, max_depth=4, learning_rate=0.05,
-                                use_label_encoder=False, eval_metric="logloss")
-    model_over.fit(X_train2, y_train2)
-    y_pred2 = model_over.predict(X_test2)
-    print(f"\n⚽ Over 2.5 — Accuracy: {accuracy_score(y_test2, y_pred2):.2%}")
-    print(classification_report(y_test2, y_pred2, target_names=["Under 2.5", "Over 2.5"]))
+        # SMOTE para balancear
+        sm = SMOTE(random_state=42)
+        X_over_bal, y_over_bal = sm.fit_resample(X, y_over)
+
+        X_train_o, X_test_o, y_train_o, y_test_o = train_test_split(
+            X_over_bal, y_over_bal, test_size=0.2, random_state=42
+        )
+
+        model_over = XGBClassifier(
+            n_estimators=300,
+            max_depth=4,
+            learning_rate=0.03,
+            subsample=0.8,
+            colsample_bytree=0.7,
+            min_child_weight=3,
+            gamma=0.1,
+            eval_metric="logloss"
+        )
+        model_over.fit(X_train_o, y_train_o)
+        y_pred_o = model_over.predict(X_test_o)
+
+        acc = accuracy_score(y_test_o, y_pred_o)
+        print(f"\n⚽ Over {t} — Accuracy: {acc:.2%}")
+        print(classification_report(y_test_o, y_pred_o,
+                                    target_names=[f"Under {t}", f"Over {t}"]))
+
+        over_models[str(t)] = {"model": model_over, "features": feature_cols}
 
     # ── Guardar modelos ──
-    os.makedirs("ml/models", exist_ok=True)
-    with open("ml/models/model_result.pkl", "wb") as f:
+    os.makedirs("models", exist_ok=True)
+    with open("models/model_result.pkl", "wb") as f:
         pickle.dump({"model": model_result, "encoder": le, "features": feature_cols}, f)
-    with open("ml/models/model_over25.pkl", "wb") as f:
-        pickle.dump({"model": model_over, "features": feature_cols}, f)
+    with open("models/model_over_under.pkl", "wb") as f:
+        pickle.dump(over_models, f)
 
     print("\n✅ Modelos guardados en ml/models/")
 
