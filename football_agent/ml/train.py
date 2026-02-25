@@ -33,13 +33,13 @@ def load_match_stats() -> pd.DataFrame:
     """Carga todos los partidos con sus stats en formato wide."""
     placeholders = ",".join(["%s"] * len(FEATURES))
     sql = f"""
-        SELECT matchId, homeTeam, awayTeam, Year, Round,
+        SELECT matchId, homeTeam, awayTeam, Year, Round, leagueId,
                name,
                SUM(CAST(homeValue AS DECIMAL)) AS homeValue,
                SUM(CAST(awayValue AS DECIMAL)) AS awayValue
         FROM {TABLE}
         WHERE name IN ({placeholders})
-        GROUP BY matchId, homeTeam, awayTeam, Year, Round, name
+        GROUP BY matchId, homeTeam, awayTeam, Year, Round, leagueId, name
         ORDER BY Year, CAST(Round AS SIGNED)
     """
     rows = run_query(sql, tuple(FEATURES))
@@ -49,7 +49,7 @@ def load_match_stats() -> pd.DataFrame:
 def build_wide_format(df: pd.DataFrame) -> pd.DataFrame:
     """Convierte de long a wide: una fila por partido con todas las stats."""
     wide = df.pivot_table(
-        index=["matchId", "homeTeam", "awayTeam", "Year", "Round"],
+        index=["matchId", "homeTeam", "awayTeam", "Year", "Round", "leagueId"],
         columns="name",
         values=["homeValue", "awayValue"],
         aggfunc="first"
@@ -129,6 +129,7 @@ def compute_team_rolling_avg(wide: pd.DataFrame, n: int = 5) -> pd.DataFrame:
             continue
 
         record = {
+            "league_id": row['leagueId'],
             "matchId":   row["matchId"],
             "homeTeam":  home,
             "awayTeam":  away,
@@ -296,8 +297,8 @@ def compute_elo(wide: pd.DataFrame, k: int = 20) -> dict:
     elo_history = {}  # {matchId: {team: elo}}
 
     for _, row in wide.sort_values(["Year", "Round"]).iterrows():
-        home = row["homeTeam"]
-        away = row["awayTeam"]
+        home = (row["homeTeam"], row["leagueId"])
+        away = (row["awayTeam"], row["leagueId"])
 
         # Elo inicial si no existe
         elo.setdefault(home, 1500)
@@ -359,76 +360,86 @@ def train():
                           "h2h_away_wins", "h2h_avg_goals",
                           "combined_0_5_rate", "combined_1_5_rate", "combined_2_5_rate", "combined_3_5_rate", 'xG_match',
                           "expected_xG_match"]]
-    X = data[feature_cols].fillna(0)
-    # Castear a float por si hay columnas object
-    X = X.astype(float)
 
-    #── Modelo 1: Resultado (1/X/2) ──
-    le = LabelEncoder()
-    y_result = le.fit_transform(data["resultado"])
+    LEAGUE_NAMES = {"8": "laliga", "17": "premier"}
 
-    sm = SMOTE(random_state=42)
-    X_balanced, y_balanced = sm.fit_resample(X, y_result)
+    # ── Entrenar modelo por liga ──
+    for league_id, league_name in LEAGUE_NAMES.items():
+        league_data = data[data["league_id"] == int(league_id)].copy()
+        print(f"\n{'=' * 55}")
+        print(f"  Entrenando {league_name.upper()} — {len(league_data)} partidos")
+        print(f"{'=' * 55}")
 
-    X_train, X_test, y_train, y_test = train_test_split(
-        X_balanced, y_balanced, test_size=0.2, random_state=42
-    )
+        X = league_data[feature_cols].fillna(0).astype(float)
 
-    model_result = XGBClassifier(
-        n_estimators=300,
-        max_depth=5,
-        learning_rate=0.03,
-        subsample=0.8,
-        colsample_bytree=0.8,
-        eval_metric="mlogloss"
-    )
-    model_result.fit(X_train, y_train)
-    y_pred = model_result.predict(X_test)
-    print(f"\n🎯 Resultado — Accuracy: {accuracy_score(y_test, y_pred):.2%}")
-    print(classification_report(y_test, y_pred, target_names=le.classes_))
+        # ── Modelo resultado ──
+        le = LabelEncoder()
+        y_result = le.fit_transform(league_data["resultado"])
 
-    # ── Modelo 2: Over/Under por threshold ──
-    over_models = {}
-    for t in OVER_THRESHOLDS:
-        col = f"over_{str(t).replace('.', '_')}"
-        y_over = data[col].astype(int)
-
-        # SMOTE para balancear
         sm = SMOTE(random_state=42)
-        X_over_bal, y_over_bal = sm.fit_resample(X, y_over)
-
-        X_train_o, X_test_o, y_train_o, y_test_o = train_test_split(
-            X_over_bal, y_over_bal, test_size=0.2, random_state=42
+        X_bal, y_bal = sm.fit_resample(X, y_result)
+        X_train, X_temp, y_train, y_temp = train_test_split(
+            X_bal, y_bal, test_size=0.3, random_state=42
+        )
+        X_val, X_test, y_val, y_test = train_test_split(
+            X_temp, y_temp, test_size=0.5, random_state=42
         )
 
-        model_over = XGBClassifier(
-            n_estimators=300,
-            max_depth=4,
-            learning_rate=0.03,
-            subsample=0.8,
-            colsample_bytree=0.7,
-            min_child_weight=3,
-            gamma=0.1,
-            eval_metric="logloss"
+        model_result = XGBClassifier(
+            n_estimators=300, max_depth=5, learning_rate=0.03,
+            subsample=0.8, colsample_bytree=0.8, eval_metric="mlogloss"
         )
-        model_over.fit(X_train_o, y_train_o)
-        y_pred_o = model_over.predict(X_test_o)
+        model_result.fit(X_train, y_train)
+        y_pred = model_result.predict(X_test)
+        print(f"\n🎯 Resultado — Accuracy: {accuracy_score(y_test, y_pred):.2%}")
+        print(classification_report(y_test, y_pred, target_names=le.classes_))
 
-        acc = accuracy_score(y_test_o, y_pred_o)
-        print(f"\n⚽ Over {t} — Accuracy: {acc:.2%}")
-        print(classification_report(y_test_o, y_pred_o,
-                                    target_names=[f"Under {t}", f"Over {t}"]))
+        from sklearn.calibration import CalibratedClassifierCV
+        calibrated_model = CalibratedClassifierCV(
+            model_result,
+            method="isotonic",  # o "sigmoid" (Platt Scaling)
+            cv=5
+        )
+        calibrated_model.fit(X_val, y_val)
 
-        over_models[str(t)] = {"model": model_over, "features": feature_cols}
+        y_pred = calibrated_model.predict(X_test)
+        print(f"\n🎯 Resultado calibrado — Accuracy: {accuracy_score(y_test, y_pred):.2%}")
+        print(classification_report(y_test, y_pred, target_names=le.classes_))
 
-    # ── Guardar modelos ──
-    os.makedirs("models", exist_ok=True)
-    with open("models/model_result.pkl", "wb") as f:
-        pickle.dump({"model": model_result, "encoder": le, "features": feature_cols}, f)
-    with open("models/model_over_under.pkl", "wb") as f:
-        pickle.dump(over_models, f)
+        # ── Guardar modelo resultado ──
+        os.makedirs("ml/models", exist_ok=True)
+        with open(f"ml/models/model_result_{league_name}.pkl", "wb") as f:
+            pickle.dump({"model": calibrated_model, "encoder": le, "features": feature_cols}, f)
 
-    print("\n✅ Modelos guardados en ml/models/")
+        # ── Modelos Over/Under ──
+        over_models = {}
+        for t in OVER_THRESHOLDS:
+            col = f"over_{str(t).replace('.', '_')}"
+            y_over = league_data[col].astype(int)
+
+            sm2 = SMOTE(random_state=42)
+            X_bal2, y_bal2 = sm2.fit_resample(X, y_over)
+            X_train2, X_test2, y_train2, y_test2 = train_test_split(
+                X_bal2, y_bal2, test_size=0.2, random_state=42
+            )
+
+            model_over = XGBClassifier(
+                n_estimators=300, max_depth=4, learning_rate=0.03,
+                subsample=0.8, colsample_bytree=0.7,
+                min_child_weight=3, gamma=0.1, eval_metric="logloss"
+            )
+            model_over.fit(X_train2, y_train2)
+            y_pred2 = model_over.predict(X_test2)
+
+            acc = accuracy_score(y_test2, y_pred2)
+            print(f"⚽ Over {t} — Accuracy: {acc:.2%}")
+
+            over_models[str(t)] = {"model": model_over, "features": feature_cols}
+
+        with open(f"ml/models/models_over_under_{league_name}.pkl", "wb") as f:
+            pickle.dump(over_models, f)
+
+        print(f"\n✅ Modelos {league_name} guardados")
 
 
 if __name__ == "__main__":

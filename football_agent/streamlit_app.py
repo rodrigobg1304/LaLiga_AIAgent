@@ -3,13 +3,33 @@ import requests
 import pandas as pd
 import sys
 import os
+os.environ["CREWAI_DISABLE_TELEMETRY"] = "true"
+os.environ["OTEL_SDK_DISABLED"] = "true"
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "src"))
-from football_agent.db import get_teams, get_years, get_standings
-from football_agent.crew import FootballAgent
+from football_agent.db import (get_teams, get_years, get_standings, get_team_results, get_goals_scored,
+                               get_teams_by_league)
+from football_agent.config import get_league_options
 from dotenv import load_dotenv
+import concurrent.futures
 
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+
+@st.cache_data(ttl=3600)
+def cached_league_options():
+    return get_league_options()
+
+
+@st.cache_data(ttl=3600)
+def cached_teams_by_league(league_id: str):
+    return get_teams_by_league(league_id=league_id)
+
+
+def run_agent(query: str) -> str:
+    try:
+        return str(FootballAgent().crew().kickoff(inputs={"query": query}))
+    except Exception as e:
+        return f"Error: {e}"
 
 # ─────────────────────────────────────────────
 # CONFIG
@@ -208,6 +228,7 @@ st.markdown("""
     .pos-1 { background: #FFD700; color: #0a0a0a; }
     .pos-2 { background: #C0C0C0; color: #0a0a0a; }
     .pos-3 { background: #CD7F32; color: #ffffff; }
+    .pos-rel { background: #ff4444; color: #ffffff; }
 
     /* Chat */
     .chat-message {
@@ -252,8 +273,8 @@ def cached_years():
 
 
 @st.cache_data(ttl=600)
-def cached_standings(year):
-    return get_standings(year)
+def cached_standings(league, year):
+    return get_standings(leagueId=league, year=year)
 
 
 # ─────────────────────────────────────────────
@@ -279,7 +300,13 @@ if section == "Predicción":
     st.markdown("### Predicción de partido")
     st.markdown('<div class="section-title">Selecciona los equipos</div>', unsafe_allow_html=True)
 
-    teams = cached_teams()
+    league_options = cached_league_options()
+    league_name = st.selectbox("Liga", list(league_options.keys()), key="league_select_pred")
+    league_id = league_options[league_name]
+
+    # Filtrar equipos por liga
+    teams = cached_teams_by_league(league_id=league_id)
+
     col1, col2 = st.columns(2)
     with col1:
         home_team = st.selectbox("Local", teams, key="home")
@@ -287,12 +314,13 @@ if section == "Predicción":
         away_options = [t for t in teams if t != home_team]
         away_team = st.selectbox("Visitante", away_options, key="away")
 
-    if st.button("Predecir", use_container_width=True):
+    if st.button("Predecir", width="stretch"):
         with st.spinner("Calculando predicción..."):
             try:
                 resp = requests.post(
                     "http://localhost:8001/predict",
-                    json={"home_team": home_team, "away_team": away_team, "year": year_global}
+                    json={"home_team": home_team, "away_team": away_team, "year": year_global,
+                          "league_id":  league_options[league_name]}
                 )
                 data = resp.json()
 
@@ -330,6 +358,16 @@ if section == "Predicción":
                         </div>
                         """, unsafe_allow_html=True)
 
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    st.markdown('<div class="section-title">Cuotas estimadas</div>', unsafe_allow_html=True)
+
+                    odds = data["resultado"]["odds"]
+                    labels = {
+                        "1": f"Victoria {home_team.split('-')[0].title()}",
+                        "X": "Empate",
+                        "2": f"Victoria {away_team.split('-')[0].title()}"
+                    }
+
                 with col2:
                     st.markdown('<div class="section-title">Over / Under goles</div>', unsafe_allow_html=True)
                     ou = data["over_under"]
@@ -348,6 +386,16 @@ if section == "Predicción":
                             </div>
                             """, unsafe_allow_html=True)
 
+                    cols = st.columns(3)
+                    for i, (key, label) in enumerate([("1", labels["1"]), ("X", labels["X"]), ("2", labels["2"])]):
+                        with cols[i]:
+                            st.markdown(f"""
+                            <div class="metric-card">
+                                <div class="metric-label">{label}</div>
+                                <div class="metric-value">{odds[key]}</div>
+                            </div>
+                            """, unsafe_allow_html=True)
+
             except Exception as e:
                 st.error(f"Error conectando con el servicio de predicción: {e}")
                 st.info("Asegúrate de que el servidor ML está corriendo: `PYTHONPATH=src python ml/predict.py`")
@@ -358,8 +406,6 @@ if section == "Predicción":
 # ─────────────────────────────────────────────
 
 elif section == "Estadísticas":
-    from football_agent.db import get_team_results, get_goals_scored
-
     st.markdown("### Estadísticas de equipo")
     team = st.selectbox("Equipo", cached_teams())
 
@@ -405,15 +451,16 @@ elif section == "Estadísticas":
                 is_home = r["homeTeam"] == team
                 gf = hg if is_home else ag
                 gc = ag if is_home else hg
+                score = f"{hg} - {ag}"
                 result_icon = "✅" if r["points"] == 3 else ("➖" if r["points"] == 1 else "❌")
                 rows.append({
                     "Jornada": int(r["Round"]),
                     "Partido": f"{r['homeTeam']} vs {r['awayTeam']}",
-                    "Resultado": f"{gf} - {gc}",
+                    "Resultado": score,
                     "": result_icon,
                     "Pts": int(r["points"])
                 })
-            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
 
 
 # ─────────────────────────────────────────────
@@ -422,13 +469,28 @@ elif section == "Estadísticas":
 
 elif section == "Clasificación":
     st.markdown("### Clasificación")
-    league = st.selectbox("Liga", ["LaLiga"], key="league_select")
-    data = cached_standings(year_global)
+
+    league_options = cached_league_options()
+    league_name = st.selectbox("Liga", list(league_options.keys()), key="league_select")
+    league_id = league_options[league_name]
+
+    data = cached_standings(league=league_id, year=year_global)
 
     if data:
         rows = ""
         for i, row in enumerate(data, 1):
-            pos_class = "pos-1" if i == 1 else "pos-2" if i == 2 else "pos-3" if i == 3 else ""
+            total = len(data)
+
+            if i == 1:
+                pos_class = "pos-1"
+            elif i == 2:
+                pos_class = "pos-2"
+            elif i == 3:
+                pos_class = "pos-3"
+            elif i >= total - 2:
+                pos_class = "pos-rel"
+            else: pos_class = ""
+
             team_name = row['team'].replace('-', ' ').title()
             pts = int(row['points'])
             pj  = int(row['played'])
@@ -495,8 +557,12 @@ elif section == "Agente":
 
         with st.spinner("El agente está pensando..."):
             try:
-                result = FootballAgent().crew().kickoff(inputs={"query": query})
-                response = str(result)
+                resp = requests.post(
+                    "http://localhost:8002/agent",
+                    json={"query": query},
+                    timeout=120
+                )
+                response = resp.json()["response"]
             except Exception as e:
                 response = f"Error: {e}"
 

@@ -51,6 +51,18 @@ def get_teams() -> list[str]:
     return [row["homeTeam"] for row in run_query(f"SELECT DISTINCT homeTeam FROM {TABLE} ORDER BY homeTeam ASC")]
 
 
+def get_teams_by_league(league_id: str) -> list[str]:
+    """
+    Get list of the teams available filtered by league.
+    :param league_id:
+    :return:
+    """
+    return [row["homeTeam"] for row in run_query(
+        f"SELECT DISTINCT homeTeam FROM {TABLE} WHERE LeagueId = %s ORDER BY homeTeam",
+        (league_id,)
+    )]
+
+
 def get_years() -> list[str]:
     """
     Get list of the years available.
@@ -142,7 +154,7 @@ def get_team_stats(team: str, stat_name: str, year: Optional[str] = None) -> lis
     return run_query(sql, tuple(params))
 
 
-def get_standings(year: str) -> list[dict]:
+def get_standings(leagueId: str, year: str) -> list[dict]:
     """Clasificación calculada desde los partidos."""
     sql = f"""
         SELECT 
@@ -162,7 +174,7 @@ def get_standings(year: str) -> list[dict]:
                 SUM(CAST(homeValue AS SIGNED)) AS gf,
                 SUM(CAST(awayValue AS SIGNED)) AS ga
             FROM {TABLE}
-            WHERE name = 'Goals' AND Year = %s
+            WHERE name = 'Goals' AND Year = %s AND leagueId = %s
             GROUP BY homeTeam, matchId
         
             UNION ALL
@@ -173,13 +185,13 @@ def get_standings(year: str) -> list[dict]:
                 SUM(CAST(awayValue AS SIGNED)) AS gf,
                 SUM(CAST(homeValue AS SIGNED)) AS ga
             FROM {TABLE}
-            WHERE name = 'Goals' AND Year = %s
+            WHERE name = 'Goals' AND Year = %s AND leagueId = %s
             GROUP BY awayTeam, matchId
         ) AS match_totals
         GROUP BY team
         ORDER BY points DESC, goals_for - goals_against DESC
     """
-    params = [year, year]
+    params = [year, leagueId, year, leagueId]
     return run_query(sql, tuple(params))
 
 
