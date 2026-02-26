@@ -6,7 +6,6 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
 from sklearn.metrics import accuracy_score, classification_report
 from imblearn.over_sampling import SMOTE
-from sklearn.utils.class_weight import compute_sample_weight
 import sys
 import os
 
@@ -143,18 +142,16 @@ def compute_team_rolling_avg(wide: pd.DataFrame, n: int = 5) -> pd.DataFrame:
         }
 
         # ── Features Over 2.5 ──
-        # Media de goles marcados + encajados por partido (últimos N)
-        home_goals_scored = home_prev["home_goals"].mean() if len(home_prev) > 0 else 0
-        home_goals_conceded = home_prev["away_goals"].mean() if len(home_prev) > 0 else 0
-        away_goals_scored = away_prev["away_goals"].mean() if len(away_prev) > 0 else 0
-        away_goals_conceded = away_prev["home_goals"].mean() if len(away_prev) > 0 else 0
+        home_goals_scored    = home_prev["home_goals"].mean() if len(home_prev) > 0 else 0
+        home_goals_conceded  = home_prev["away_goals"].mean() if len(home_prev) > 0 else 0
+        away_goals_scored    = away_prev["away_goals"].mean() if len(away_prev) > 0 else 0
+        away_goals_conceded  = away_prev["home_goals"].mean() if len(away_prev) > 0 else 0
 
-        record["home_avg_goals_scored"] = home_goals_scored
+        record["home_avg_goals_scored"]   = home_goals_scored
         record["home_avg_goals_conceded"] = home_goals_conceded
-        record["away_avg_goals_scored"] = away_goals_scored
+        record["away_avg_goals_scored"]   = away_goals_scored
         record["away_avg_goals_conceded"] = away_goals_conceded
 
-        # Total de goles esperados combinando ataque local vs defensa visitante y viceversa
         record["xG_match"] = (home_goals_scored + away_goals_conceded +
                               away_goals_scored + home_goals_conceded) / 2
 
@@ -167,7 +164,7 @@ def compute_team_rolling_avg(wide: pd.DataFrame, n: int = 5) -> pd.DataFrame:
                 record[f"away_{col}_rate"] = (away_prev[col] == 1).mean()
             if col in h2h.columns and len(h2h) > 0:
                 record[f"h2h_{col}_rate"] = (h2h[col] == 1).mean()
-            record[f"combined_{col}_rate"] = (record[f"home_{col}_rate"] + record[f"away_{col}_rate"]) / 2
+            record[f"combined_{col}_rate"] = (record.get(f"home_{col}_rate", 0) + record.get(f"away_{col}_rate", 0)) / 2
 
         # xG medio de ambos equipos
         xg_home_col = "Expected goals_homeValue"
@@ -177,13 +174,12 @@ def compute_team_rolling_avg(wide: pd.DataFrame, n: int = 5) -> pd.DataFrame:
         if xg_away_col in away_prev.columns:
             record["away_avg_xG"] = away_prev[xg_away_col].mean()
 
-        # xG combinado esperado del partido
         if xg_home_col in home_prev.columns and xg_away_col in away_prev.columns:
             record["expected_xG_match"] = (
-                    home_prev[xg_home_col].mean() + away_prev[xg_away_col].mean()
+                home_prev[xg_home_col].mean() + away_prev[xg_away_col].mean()
             )
 
-        # Tiros totales medios (proxy de intensidad ofensiva)
+        # Tiros totales medios
         shots_home_col = "Total shots_homeValue"
         shots_away_col = "Total shots_awayValue"
         if shots_home_col in home_prev.columns:
@@ -191,7 +187,7 @@ def compute_team_rolling_avg(wide: pd.DataFrame, n: int = 5) -> pd.DataFrame:
         if shots_away_col in away_prev.columns:
             record["away_avg_shots"] = away_prev[shots_away_col].mean()
 
-        # Big chances medias (calidad de ocasiones)
+        # Big chances medias
         bc_home_col = "Big chances_homeValue"
         bc_away_col = "Big chances_awayValue"
         if bc_home_col in home_prev.columns:
@@ -199,7 +195,6 @@ def compute_team_rolling_avg(wide: pd.DataFrame, n: int = 5) -> pd.DataFrame:
         if bc_away_col in away_prev.columns:
             record["away_avg_big_chances"] = away_prev[bc_away_col].mean()
 
-        # H2H goles medios (historial de partidos entre estos equipos)
         record["h2h_avg_goals"] = (h2h["home_goals"] + h2h["away_goals"]).mean() if len(h2h) > 0 else 0
 
         # ── Features stats rolling (local y visitante) ──
@@ -212,14 +207,14 @@ def compute_team_rolling_avg(wide: pd.DataFrame, n: int = 5) -> pd.DataFrame:
                 record[f"away_avg_{feat}"] = away_prev[acol].mean()
 
         # ── Win rate como local (últimos N) ──
-        record["home_win_rate_home"] = (home_prev["resultado"] == "1").mean() if len(home_prev) > 0 else 0
+        record["home_win_rate_home"]  = (home_prev["resultado"] == "1").mean() if len(home_prev) > 0 else 0
         record["home_draw_rate_home"] = (home_prev["resultado"] == "X").mean() if len(home_prev) > 0 else 0
         record["home_loss_rate_home"] = (home_prev["resultado"] == "2").mean() if len(home_prev) > 0 else 0
 
         # ── Win rate como visitante (últimos N) ──
-        record["away_win_rate_away"] = (away_prev["resultado"] == "2").mean() if len(away_prev) > 0 else 0
+        record["away_win_rate_away"]  = (away_prev["resultado"] == "2").mean() if len(away_prev) > 0 else 0
         record["away_draw_rate_away"] = (away_prev["resultado"] == "X").mean() if len(away_prev) > 0 else 0
-        record["away_loss_rate_away"] = (away_prev["resultado"] == "2").mean() if len(away_prev) > 0 else 0
+        record["away_loss_rate_away"] = (away_prev["resultado"] == "1").mean() if len(away_prev) > 0 else 0
 
         # ── Win rate global (local + visitante combinado) ──
         if len(home_all) > 0:
@@ -256,15 +251,15 @@ def compute_team_rolling_avg(wide: pd.DataFrame, n: int = 5) -> pd.DataFrame:
 
         # ── Head to head ──
         if len(h2h) > 0:
-            record["h2h_home_wins"]  = (h2h["resultado"] == "1").mean()
-            record["h2h_draws"]      = (h2h["resultado"] == "X").mean()
-            record["h2h_away_wins"]  = (h2h["resultado"] == "2").mean()
-            record["h2h_avg_goals"]  = (h2h["home_goals"] + h2h["away_goals"]).mean()
+            record["h2h_home_wins"] = (h2h["resultado"] == "1").mean()
+            record["h2h_draws"]     = (h2h["resultado"] == "X").mean()
+            record["h2h_away_wins"] = (h2h["resultado"] == "2").mean()
+            record["h2h_avg_goals"] = (h2h["home_goals"] + h2h["away_goals"]).mean()
         else:
-            record["h2h_home_wins"]  = 0
-            record["h2h_draws"]      = 0
-            record["h2h_away_wins"]  = 0
-            record["h2h_avg_goals"]  = 0
+            record["h2h_home_wins"] = 0
+            record["h2h_draws"]     = 0
+            record["h2h_away_wins"] = 0
+            record["h2h_avg_goals"] = 0
 
         # ── Forma reciente (últimos 5, independiente de N) ──
         home_form = wide[
@@ -291,24 +286,20 @@ def compute_team_rolling_avg(wide: pd.DataFrame, n: int = 5) -> pd.DataFrame:
 
 
 def compute_elo(wide: pd.DataFrame, k: int = 20) -> dict:
-    """Calcula el Elo de cada equipo partido a partido.
-    Elo es un sistema de rating numérico que mide la fuerza relativa de cada equipo en cada momento"""
+    """Calcula el Elo de cada equipo partido a partido."""
     elo = {}
-    elo_history = {}  # {matchId: {team: elo}}
+    elo_history = {}
 
     for _, row in wide.sort_values(["Year", "Round"]).iterrows():
         home = (row["homeTeam"], row["leagueId"])
         away = (row["awayTeam"], row["leagueId"])
 
-        # Elo inicial si no existe
         elo.setdefault(home, 1500)
         elo.setdefault(away, 1500)
 
-        # Probabilidad esperada
         exp_home = 1 / (1 + 10 ** ((elo[away] - elo[home]) / 400))
         exp_away = 1 - exp_home
 
-        # Resultado real
         if row["resultado"] == "1":
             score_home, score_away = 1, 0
         elif row["resultado"] == "2":
@@ -323,30 +314,64 @@ def compute_elo(wide: pd.DataFrame, k: int = 20) -> dict:
             "elo_diff": elo[home] - elo[away]
         }
 
-        # Actualizar Elo
         elo[home] += k * (score_home - exp_home)
         elo[away] += k * (score_away - exp_away)
 
     return elo_history
 
 # ─────────────────────────────────────────────
-# 3. ENTRENAR MODELOS
+# 3. CALIBRACIÓN ISOTÓNICA
 # ─────────────────────────────────────────────
+
+class HybridCalibratedModel:
+    """
+    Wrapper de calibración isotónica manual compatible con todas las versiones de sklearn.
+    Alternativa a CalibratedClassifierCV(cv="prefit") que no está disponible en versiones antiguas.
+    Entrena un IsotonicRegression por clase sobre las probabilidades raw del modelo base,
+    sin reentrenar el XGBoost subyacente.
+    """
+    def __init__(self, base_model, regressors, classes):
+        self.base_model = base_model
+        self.regressors = regressors
+        self.classes_   = classes
+
+    def predict_proba(self, X):
+        import numpy as np
+        raw = self.base_model.predict_proba(X)
+        cal = np.column_stack([
+            self.regressors[i].predict(raw[:, i])
+            for i in range(len(self.regressors))
+        ])
+        row_sums = cal.sum(axis=1, keepdims=True)
+        row_sums = np.where(row_sums == 0, 1, row_sums)
+        return cal / row_sums
+
+    def predict(self, X):
+        import numpy as np
+        proba = self.predict_proba(X)
+        return self.classes_[np.argmax(proba, axis=1)]
+
+
+# ─────────────────────────────────────────────
+# 4. ENTRENAR MODELOS
+# ─────────────────────────────────────────────
+
+# Umbral de elo_diff para considerar un partido como favorito claro
+ELO_DIFF_THRESHOLD = 20
 
 def train():
     print("📥 Cargando datos...")
     df   = load_match_stats()
     wide = build_wide_format(df)
-    data = compute_team_rolling_avg(wide)
 
+    # ── CORRECCIÓN: compute_team_rolling_avg se llama UNA sola vez ──
+    data = compute_team_rolling_avg(wide)
     print(f"✅ Dataset: {len(data)} partidos con histórico suficiente")
 
     # Añadir Elo
     elo_history = compute_elo(wide)
     elo_df = pd.DataFrame.from_dict(elo_history, orient="index").reset_index()
     elo_df.columns = ["matchId", "elo_home", "elo_away", "elo_diff"]
-
-    data = compute_team_rolling_avg(wide)
     data = data.merge(elo_df, on="matchId", how="left")
 
     feature_cols = [c for c in data.columns if
@@ -358,12 +383,12 @@ def train():
                           "home_form_pts", "away_form_pts",
                           "h2h_home_wins", "h2h_draws",
                           "h2h_away_wins", "h2h_avg_goals",
-                          "combined_0_5_rate", "combined_1_5_rate", "combined_2_5_rate", "combined_3_5_rate", 'xG_match',
-                          "expected_xG_match"]]
+                          "combined_0_5_rate", "combined_1_5_rate",
+                          "combined_2_5_rate", "combined_3_5_rate",
+                          "xG_match", "expected_xG_match"]]
 
     LEAGUE_NAMES = {"8": "laliga", "17": "premier"}
 
-    # ── Entrenar modelo por liga ──
     for league_id, league_name in LEAGUE_NAMES.items():
         league_data = data[data["league_id"] == int(league_id)].copy()
         print(f"\n{'=' * 55}")
@@ -378,6 +403,8 @@ def train():
 
         sm = SMOTE(random_state=42)
         X_bal, y_bal = sm.fit_resample(X, y_result)
+
+        # Split 70% train / 15% val / 15% test
         X_train, X_temp, y_train, y_temp = train_test_split(
             X_bal, y_bal, test_size=0.3, random_state=42
         )
@@ -385,31 +412,49 @@ def train():
             X_temp, y_temp, test_size=0.5, random_state=42
         )
 
+        # ── 1. Entrenar XGBoost base ──
         model_result = XGBClassifier(
             n_estimators=300, max_depth=5, learning_rate=0.03,
             subsample=0.8, colsample_bytree=0.8, eval_metric="mlogloss"
         )
         model_result.fit(X_train, y_train)
-        y_pred = model_result.predict(X_test)
-        print(f"\n🎯 Resultado — Accuracy: {accuracy_score(y_test, y_pred):.2%}")
-        print(classification_report(y_test, y_pred, target_names=le.classes_))
 
-        from sklearn.calibration import CalibratedClassifierCV
-        calibrated_model = CalibratedClassifierCV(
-            model_result,
-            method="isotonic",  # o "sigmoid" (Platt Scaling)
-            cv=5
-        )
-        calibrated_model.fit(X_val, y_val)
+        y_pred_base = model_result.predict(X_test)
+        print(f"\n🎯 Resultado (base) — Accuracy: {accuracy_score(y_test, y_pred_base):.2%}")
+        print(classification_report(y_test, y_pred_base, target_names=le.classes_))
 
-        y_pred = calibrated_model.predict(X_test)
-        print(f"\n🎯 Resultado calibrado — Accuracy: {accuracy_score(y_test, y_pred):.2%}")
-        print(classification_report(y_test, y_pred, target_names=le.classes_))
+        # ── 2. Calibrar sobre el conjunto de validación ──
+        # Usamos un pipeline manual para no reentrenar el XGBoost base:
+        # obtenemos las probabilidades raw del modelo ya entrenado sobre X_val,
+        # y entrenamos un IsotonicRegression por clase para mapearlas a probs calibradas.
+        from sklearn.isotonic import IsotonicRegression
 
-        # ── Guardar modelo resultado ──
+        proba_val = model_result.predict_proba(X_val)
+        n_classes = len(le.classes_)
+
+        iso_regressors = []
+        for i in range(n_classes):
+            target_i = (y_val == i).astype(int)
+            iso = IsotonicRegression(out_of_bounds="clip")
+            iso.fit(proba_val[:, i], target_i)
+            iso_regressors.append(iso)
+
+        calibrated_model = HybridCalibratedModel(model_result, iso_regressors, le.classes_)
+
+        y_pred_cal = calibrated_model.predict(X_test)
+        y_test_labels = le.inverse_transform(y_test)
+        print(f"\n Resultado (calibrado) - Accuracy: {accuracy_score(y_test_labels, y_pred_cal):.2%}")
+        print(classification_report(y_test_labels, y_pred_cal, target_names=le.classes_))
+        # ── 3. Guardar: modelo base + calibrado + encoder + features + umbral elo ──
         os.makedirs("ml/models", exist_ok=True)
         with open(f"ml/models/model_result_{league_name}.pkl", "wb") as f:
-            pickle.dump({"model": calibrated_model, "encoder": le, "features": feature_cols}, f)
+            pickle.dump({
+                "model":            model_result,       # XGBoost sin calibrar
+                "calibrated_model": calibrated_model,   # XGBoost + capa isotonic
+                "encoder":          le,
+                "features":         feature_cols,
+                "elo_diff_threshold": ELO_DIFF_THRESHOLD  # umbral para confidence
+            }, f)
 
         # ── Modelos Over/Under ──
         over_models = {}

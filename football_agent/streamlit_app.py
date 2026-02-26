@@ -3,6 +3,7 @@ import requests
 import pandas as pd
 import sys
 import os
+
 os.environ["CREWAI_DISABLE_TELEMETRY"] = "true"
 os.environ["OTEL_SDK_DISABLED"] = "true"
 
@@ -14,6 +15,7 @@ from dotenv import load_dotenv
 import concurrent.futures
 
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+
 
 @st.cache_data(ttl=3600)
 def cached_league_options():
@@ -30,6 +32,7 @@ def run_agent(query: str) -> str:
         return str(FootballAgent().crew().kickoff(inputs={"query": query}))
     except Exception as e:
         return f"Error: {e}"
+
 
 # ─────────────────────────────────────────────
 # CONFIG
@@ -56,7 +59,7 @@ st.markdown("""
     [data-testid="collapsedControl"] {
         display: none !important;
     }
-    
+
     [data-testid="stSidebar"] [data-testid="stSelectbox"] * {
         color: #ffffff !important;
     }
@@ -87,17 +90,17 @@ st.markdown("""
     [data-testid="stSidebar"] .stRadio [aria-checked="true"] + label {
         color: #ffffff !important;
     }
-    
+
     /* Color del valor seleccionado en selectbox del sidebar */
     [data-testid="stSidebar"] .stSelectbox div[data-baseweb="select"] > div {
         background-color: #1a1a1a !important;
         border-color: #333333 !important;
     }
-    
+
     [data-testid="stSidebar"] .stSelectbox div[data-baseweb="select"] > div > div {
         color: #ffffff !important;
     }
-    
+
     [data-testid="stSidebar"] .stSelectbox input {
         color: #ffffff !important;
         background-color: #1a1a1a !important;
@@ -320,7 +323,7 @@ if section == "Predicción":
                 resp = requests.post(
                     "http://localhost:8001/predict",
                     json={"home_team": home_team, "away_team": away_team, "year": year_global,
-                          "league_id":  league_options[league_name]}
+                          "league_id": league_options[league_name]}
                 )
                 data = resp.json()
 
@@ -336,20 +339,22 @@ if section == "Predicción":
                 # Resultado
                 col1, col2 = st.columns([1, 1])
                 with col1:
-                    st.markdown('<div class="section-title">Resultado probable</div>', unsafe_allow_html=True)
+                    st.markdown('<div class="section-title">Resultado probable (cuota estimada)</div>', unsafe_allow_html=True)
                     probs = data["resultado"]["probabilities"]
                     predicted = data["resultado"]["predicted"]
-                    labels = {"1": f"Victoria {home_team.split('-')[0].title()}",
+                    odds = data["resultado"]["odds"]
+                    labels = {"1": f"Victoria {home_team.replace('-', ' ').title()}",
                               "X": "Empate",
-                              "2": f"Victoria {away_team.split('-')[0].title()}"}
+                              "2": f"Victoria {away_team.replace('-', ' ').title()}"}
 
                     for key, label in labels.items():
                         pct = probs[key]
+                        odd_val = odds[key]
                         is_predicted = "●  " if key == predicted else "○  "
                         st.markdown(f"""
                         <div class="prob-bar-container">
                             <div class="prob-label">
-                                <span>{is_predicted}{label}</span>
+                                <span>{is_predicted}{label} <span style="color:#888888;font-size:12px">({odd_val})</span></span>
                                 <span style="font-family:'DM Mono',monospace">{pct:.1f}%</span>
                             </div>
                             <div class="prob-bar">
@@ -357,16 +362,6 @@ if section == "Predicción":
                             </div>
                         </div>
                         """, unsafe_allow_html=True)
-
-                    st.markdown("<br>", unsafe_allow_html=True)
-                    st.markdown('<div class="section-title">Cuotas estimadas</div>', unsafe_allow_html=True)
-
-                    odds = data["resultado"]["odds"]
-                    labels = {
-                        "1": f"Victoria {home_team.split('-')[0].title()}",
-                        "X": "Empate",
-                        "2": f"Victoria {away_team.split('-')[0].title()}"
-                    }
 
                 with col2:
                     st.markdown('<div class="section-title">Over / Under goles</div>', unsafe_allow_html=True)
@@ -386,15 +381,7 @@ if section == "Predicción":
                             </div>
                             """, unsafe_allow_html=True)
 
-                    cols = st.columns(3)
-                    for i, (key, label) in enumerate([("1", labels["1"]), ("X", labels["X"]), ("2", labels["2"])]):
-                        with cols[i]:
-                            st.markdown(f"""
-                            <div class="metric-card">
-                                <div class="metric-label">{label}</div>
-                                <div class="metric-value">{odds[key]}</div>
-                            </div>
-                            """, unsafe_allow_html=True)
+
 
             except Exception as e:
                 st.error(f"Error conectando con el servicio de predicción: {e}")
@@ -489,16 +476,17 @@ elif section == "Clasificación":
                 pos_class = "pos-3"
             elif i >= total - 2:
                 pos_class = "pos-rel"
-            else: pos_class = ""
+            else:
+                pos_class = ""
 
             team_name = row['team'].replace('-', ' ').title()
             pts = int(row['points'])
-            pj  = int(row['played'])
-            v   = int(row['wins'])
-            e   = int(row['draws'])
-            d   = int(row['losses'])
-            gf  = int(row['goals_for'])
-            gc  = int(row['goals_against'])
+            pj = int(row['played'])
+            v = int(row['wins'])
+            e = int(row['draws'])
+            d = int(row['losses'])
+            gf = int(row['goals_for'])
+            gc = int(row['goals_against'])
 
             rows += (
                 f"<tr>"
