@@ -387,7 +387,7 @@ def train():
                           "combined_2_5_rate", "combined_3_5_rate",
                           "xG_match", "expected_xG_match"]]
 
-    LEAGUE_NAMES = {"8": "laliga", "17": "premier"}
+    LEAGUE_NAMES = {"8": "laliga", "17": "premier", "23": "seriea"}
 
     for league_id, league_name in LEAGUE_NAMES.items():
         league_data = data[data["league_id"] == int(league_id)].copy()
