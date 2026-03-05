@@ -1,0 +1,108 @@
+{
+  "accuracy": 0.3925925925925926,
+  "log_loss": 1.1192044917730772,
+  "classification_report": {
+    "1 (Home)": {
+      "precision": 0.5384615384615384,
+      "recall": 0.20192307692307693,
+      "f1-score": 0.2937062937062937,
+      "support": 104.0
+    },
+    "X (Draw)": {
+      "precision": 0.3484848484848485,
+      "recall": 0.7752808988764045,
+      "f1-score": 0.4808362369337979,
+      "support": 89.0
+    },
+    "2 (Away)": {
+      "precision": 0.48484848484848486,
+      "recall": 0.2077922077922078,
+      "f1-score": 0.2909090909090909,
+      "support": 77.0
+    },
+    "accuracy": 0.3925925925925926,
+    "macro avg": {
+      "precision": 0.45726495726495725,
+      "recall": 0.39499872786389645,
+      "f1-score": 0.35515054051639416,
+      "support": 270.0
+    },
+    "weighted avg": {
+      "precision": 0.4605499438832772,
+      "recall": 0.3925925925925926,
+      "f1-score": 0.3545921467872687,
+      "support": 270.0
+    }
+  },
+  "predictions_distribution": {
+    "1": 39,
+    "X": 198,
+    "2": 33
+  },
+  "real_distribution": {
+    "1": 104,
+    "X": 89,
+    "2": 77
+  },
+  "test_size": 270,
+  "feature_importances": {
+    "elo_home": 0.030375832691788673,
+    "elo_away": 0.022827763110399246,
+    "elo_diff": 0.04729999229311943,
+    "home_win_rate": 0.02523811161518097,
+    "home_goals_for_avg": 0.023224277421832085,
+    "home_goals_against_avg": 0.02308528870344162,
+    "home_points_avg": 0.02477343939244747,
+    "home_shots_on_target_avg": 0.028245747089385986,
+    "home_possession_avg": 0.026763642206788063,
+    "home_total_shots_avg": 0.025583045557141304,
+    "home_gk_saves_avg": 0.024631652981042862,
+    "home_big_chances_avg": 0.02392212301492691,
+    "home_accurate_passes_avg": 0.02428293600678444,
+    "home_tackles_won_avg": 0.0239096786826849,
+    "home_interceptions_avg": 0.022134851664304733,
+    "home_blocked_shots_avg": 0.02619507908821106,
+    "away_win_rate": 0.023696010932326317,
+    "away_goals_for_avg": 0.025328360497951508,
+    "away_goals_against_avg": 0.023612461984157562,
+    "away_points_avg": 0.023819707334041595,
+    "away_shots_on_target_avg": 0.02486250177025795,
+    "away_possession_avg": 0.023820266127586365,
+    "away_total_shots_avg": 0.024595918133854866,
+    "away_gk_saves_avg": 0.027063677087426186,
+    "away_big_chances_avg": 0.023209523409605026,
+    "away_accurate_passes_avg": 0.025038065388798714,
+    "away_tackles_won_avg": 0.022049184888601303,
+    "away_interceptions_avg": 0.024706074967980385,
+    "away_blocked_shots_avg": 0.024758407846093178,
+    "h2h_home_win_rate": 0.02376469410955906,
+    "h2h_home_goals_avg": 0.02458086423575878,
+    "h2h_away_goals_avg": 0.022544240579009056,
+    "h2h_total_goals_avg": 0.02421051263809204,
+    "h2h_used_proxy": 0.015490164048969746,
+    "elo_diff_abs": 0.026276664808392525,
+    "form_balance": 0.024751946330070496,
+    "goals_balance": 0.023825500160455704,
+    "possession_balance": 0.024195946753025055,
+    "shots_balance": 0.02428497187793255,
+    "shots_on_target_balance": 0.027020925655961037
+  },
+  "best_iteration": 99,
+  "best_score": 1.1207546441113216,
+  "timestamp": "2026-03-05T15:58:17.242975",
+  "league": "premier_league",
+  "model_type": "XGBoost",
+  "config": {
+    "objective": "multi:softprob",
+    "num_class": 3,
+    "max_depth": 6,
+    "learning_rate": 0.05,
+    "n_estimators": 300,
+    "subsample": 0.8,
+    "colsample_bytree": 0.8,
+    "min_child_weight": 10,
+    "gamma": 0.1,
+    "min_prob": 0.04,
+    "test_season": "25/26"
+  }
+}

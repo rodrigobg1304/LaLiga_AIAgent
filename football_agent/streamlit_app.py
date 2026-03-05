@@ -385,7 +385,7 @@ if section == "Predicción":
 
             except Exception as e:
                 st.error(f"Error conectando con el servicio de predicción: {e}")
-                st.info("Asegúrate de que el servidor ML está corriendo: `PYTHONPATH=src python ml/predict.py`")
+                st.info("Asegúrate de que el servidor ML está corriendo: `PYTHONPATH=src python ml/predict_old.py`")
 
 
 # ─────────────────────────────────────────────

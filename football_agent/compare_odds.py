@@ -248,26 +248,44 @@ def compare(fixture: dict, model_odds: dict) -> None:
         print(f"  ⚠️  ERROR modelo: {m['error']}")
         return
 
-    header = f"  {'':8} {'1':>7} {'X':>7} {'2':>7}"
+    header = f"  {'':12} {'1':>7} {'X':>7} {'2':>7}"
     print(header)
-    print(f"  {'Bet365':8} {b.get('1','-'):>7} {b.get('X','-'):>7} {b.get('2','-'):>7}")
-    print(f"  {'Modelo':8} {m.get('1','-'):>7} {m.get('X','-'):>7} {m.get('2','-'):>7}")
 
-    # Diferencias
-    diffs = {}
+    # Cuotas
+    print(f"  {'Bet365':12} {b.get('1','-'):>7} {b.get('X','-'):>7} {b.get('2','-'):>7}")
+    print(f"  {'Modelo':12} {m.get('1','-'):>7} {m.get('X','-'):>7} {m.get('2','-'):>7}")
+
+    # Probabilidades implícitas y edge
+    prob_b, prob_m, edges = {}, {}, {}
     for k in ["1", "X", "2"]:
         bv = b.get(k)
         mv = m.get(k)
         if bv and mv:
-            diffs[k] = round(mv - bv, 2)
+            pb = round(1 / bv * 100, 1)
+            pm = round(1 / mv * 100, 1)
+            prob_b[k] = pb
+            prob_m[k] = pm
+            # Edge = prob_modelo - prob_bet365
+            # Positivo => modelo ve este resultado MÁS probable que la casa => valor real
+            edges[k] = round(pm - pb, 1)
 
-    signs = {k: ("+" if v > 0 else "") + str(v) for k, v in diffs.items()}
-    print(f"  {'Diff':8} {signs.get('1',''):>7} {signs.get('X',''):>7} {signs.get('2',''):>7}")
+    pb_str = {k: f"{v}%" for k, v in prob_b.items()}
+    pm_str = {k: f"{v}%" for k, v in prob_m.items()}
+    edge_str = {k: ("+" if v > 0 else "") + f"{v}pp" for k, v in edges.items()}
 
-    # Value bets: modelo da cuota > Bet365 (el modelo cree que hay valor)
-    value = [k for k, v in diffs.items() if v > 0.2]
+    print(f"  {'Prob Bet365':12} {pb_str.get('1',''):>7} {pb_str.get('X',''):>7} {pb_str.get('2',''):>7}")
+    print(f"  {'Prob Modelo':12} {pm_str.get('1',''):>7} {pm_str.get('X',''):>7} {pm_str.get('2',''):>7}")
+    print(f"  {'Edge (pp)':12} {edge_str.get('1',''):>7} {edge_str.get('X',''):>7} {edge_str.get('2',''):>7}")
+
+    # Valor REAL: el modelo asigna MÁS probabilidad que la casa (edge positivo)
+    # => cuota_modelo < cuota_bet365  (la casa paga más de lo que el modelo cree que debería)
+    # Umbral mínimo: +3pp de edge para filtrar ruido
+    value = [k for k, v in edges.items() if v >= 3.0]
     if value:
-        print(f"  💡 Posible valor en: {', '.join(value)}")
+        details = "  |  ".join(f"{k}: edge +{edges[k]}pp @ {b[k]}" for k in value)
+        print(f"  💡 Valor real en: {details}")
+    else:
+        print(f"  —  Sin señal de valor clara")
 
 
 def main():

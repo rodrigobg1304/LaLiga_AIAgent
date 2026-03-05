@@ -159,6 +159,8 @@ def get_standings(leagueId: str, year: str) -> list[dict]:
     sql = f"""
         SELECT 
             team,
+            leagueId,
+            Year as year,
             Count(*) AS played,
             SUM(gf) AS goals_for,
             SUM(ga) AS goals_against,
@@ -171,28 +173,38 @@ def get_standings(leagueId: str, year: str) -> list[dict]:
             SELECT 
                 homeTeam AS team,
                 matchId,
+                leagueId,
+                Year,
                 SUM(CAST(homeValue AS SIGNED)) AS gf,
                 SUM(CAST(awayValue AS SIGNED)) AS ga
             FROM {TABLE}
             WHERE name = 'Goals' AND Year = %s AND leagueId = %s
-            GROUP BY homeTeam, matchId
+            GROUP BY homeTeam, matchId, Year, leagueId
         
             UNION ALL
         
             SELECT 
                 awayTeam AS team,
                 matchId,
+                leagueId,
+                Year,
                 SUM(CAST(awayValue AS SIGNED)) AS gf,
                 SUM(CAST(homeValue AS SIGNED)) AS ga
             FROM {TABLE}
             WHERE name = 'Goals' AND Year = %s AND leagueId = %s
-            GROUP BY awayTeam, matchId
+            GROUP BY awayTeam, matchId, Year, leagueId
         ) AS match_totals
         GROUP BY team
         ORDER BY points DESC, goals_for - goals_against DESC
     """
     params = [year, leagueId, year, leagueId]
-    return run_query(sql, tuple(params))
+    results = run_query(sql, tuple(params))
+
+    # Añadir posición manualmente
+    for i, row in enumerate(results, start=1):
+        row['position'] = i
+
+    return results
 
 
 def get_top_stats(stat_name: str, year: str, top_n: int = 10) -> list[dict]:

@@ -82,7 +82,7 @@ def retrain():
     log.info("🔄 Iniciando reentrenamiento...")
     start = datetime.now()
 
-    train_script = os.path.join(os.path.dirname(__file__), "train.py")
+    train_script = os.path.join(os.path.dirname(__file__), "train_old.py")
     src_path     = os.path.join(os.path.dirname(__file__), "../src")
 
     result = subprocess.run(

@@ -1,0 +1,104 @@
+{
+  "accuracy": 0.4959677419354839,
+  "log_loss": 0.9949059942492121,
+  "classification_report": {
+    "1 (Home)": {
+      "precision": 0.5666666666666667,
+      "recall": 0.6601941747572816,
+      "f1-score": 0.6098654708520179,
+      "support": 103.0
+    },
+    "X (Draw)": {
+      "precision": 0.4266666666666667,
+      "recall": 0.367816091954023,
+      "f1-score": 0.3950617283950617,
+      "support": 87.0
+    },
+    "2 (Away)": {
+      "precision": 0.4339622641509434,
+      "recall": 0.39655172413793105,
+      "f1-score": 0.4144144144144144,
+      "support": 58.0
+    },
+    "accuracy": 0.4959677419354839,
+    "macro avg": {
+      "precision": 0.47576519916142557,
+      "recall": 0.4748539969497452,
+      "f1-score": 0.47311387122049803,
+      "support": 248.0
+    },
+    "weighted avg": {
+      "precision": 0.48651805640089274,
+      "recall": 0.4959677419354839,
+      "f1-score": 0.4888006044522752,
+      "support": 248.0
+    }
+  },
+  "predictions_distribution": {
+    "1": 120,
+    "X": 75,
+    "2": 53
+  },
+  "real_distribution": {
+    "1": 103,
+    "X": 87,
+    "2": 58
+  },
+  "test_size": 248,
+  "feature_importances": {
+    "elo_home": 0.032024111059955174,
+    "elo_away": 0.03033142281272939,
+    "elo_diff": 0.05035792315609602,
+    "home_win_rate": 0.03086148868051275,
+    "home_goals_for_avg": 0.025980047576042276,
+    "home_goals_against_avg": 0.0201868645603625,
+    "home_points_avg": 0.035236199653451504,
+    "home_shots_on_target_avg": 0.021893508319788122,
+    "home_possession_avg": 0.022196710301518978,
+    "home_total_shots_avg": 0.023802772745238156,
+    "home_gk_saves_avg": 0.020275617943476192,
+    "home_big_chances_avg": 0.024419091279857204,
+    "home_accurate_passes_avg": 0.032272636794144396,
+    "home_tackles_won_avg": 0.019183623840671783,
+    "home_interceptions_avg": 0.01904685729587565,
+    "home_blocked_shots_avg": 0.017250094141974155,
+    "away_win_rate": 0.025175624429711597,
+    "away_goals_for_avg": 0.02268254500203171,
+    "away_goals_against_avg": 0.020644433914085294,
+    "away_points_avg": 0.02944723008881207,
+    "away_shots_on_target_avg": 0.028572069396654097,
+    "away_possession_avg": 0.04090932910453943,
+    "away_total_shots_avg": 0.024993873049209015,
+    "away_gk_saves_avg": 0.020864833297194883,
+    "away_big_chances_avg": 0.034264260647827186,
+    "away_accurate_passes_avg": 0.0510689512165734,
+    "away_tackles_won_avg": 0.02202944475842983,
+    "away_interceptions_avg": 0.0190514938412285,
+    "away_blocked_shots_avg": 0.024935446713154858,
+    "h2h_home_win_rate": 0.017401193484641208,
+    "h2h_home_goals_avg": 0.015231766380330492,
+    "h2h_away_goals_avg": 0.011729219953648073,
+    "h2h_total_goals_avg": 0.011462596178020387,
+    "h2h_used_proxy": 0.0023894305051087726,
+    "elo_diff_abs": 0.026578352411974048,
+    "form_balance": 0.028473881980793612,
+    "goals_balance": 0.024166799355709014,
+    "possession_balance": 0.022677284924636797,
+    "shots_balance": 0.027995052915260672,
+    "shots_on_target_balance": 0.021935916288730886
+  },
+  "timestamp": "2026-03-05T15:48:18.221884",
+  "league": "laliga",
+  "model_type": "RandomForest_Calibrated",
+  "config": {
+    "elo_k": 40,
+    "elo_scale": 600,
+    "elo_system": "dual_home_away",
+    "elo_initial": 1500,
+    "form_window": 10,
+    "form_weight_recent": 0.65,
+    "h2h_min_matches": 2,
+    "min_prob": 0.04,
+    "test_season": "25/26"
+  }
+}
