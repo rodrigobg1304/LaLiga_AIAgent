@@ -15,11 +15,11 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "../src"))
 from football_agent.db import run_query, TABLE
 
 try:
-    from ml.train import HybridCalibratedModel  # noqa: F401
-    from ml.train import FEATURES
+#     # from ml.train import HybridCalibratedModel  # noqa: F401
+     from ml.train import FEATURES
 except ModuleNotFoundError:
-    from train_old import HybridCalibratedModel  # noqa: F401
-    from train_old import FEATURES
+#     # from train_old import HybridCalibratedModel  # noqa: F401
+     from train_old import FEATURES
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -94,16 +94,17 @@ class ModelManager1X2:
 
         print("✅ Modelos 1X2 cargados exitosamente")
 
-    def predict_1x2(self, league_id: str, features_40: np.ndarray) -> dict:
+    def predict_1x2(self, league_id: str, features_40: np.ndarray, elo_diff: float) -> dict:
         """
-        Predice 1X2 según la liga
+        Predice 1X2 usando Bayesian Blend dinámico: Elo + Modelo ML
 
         Args:
             league_id: '8', '17', o '23'
-            features_40: Array numpy con 40 features (mismo que usas ahora)
+            features_40: Array numpy con 40 features
+            elo_diff: Diferencia elo_home - elo_away (para calcular blend weight)
 
         Returns:
-            dict con probabilidades 1X2
+            dict con probabilidades 1X2 blended
         """
         if league_id not in self.models:
             # Fallback: si no hay modelo específico, usar baseline neutro
@@ -115,10 +116,11 @@ class ModelManager1X2:
 
         model_config = self.models[league_id]
 
+        # ── PASO 1: PREDICCIÓN DEL MODELO ML ──
         if model_config['type'] == 'rf':
             # Random Forest simple (LaLiga, Serie A)
             model = model_config['model']
-            probas = model.predict_proba(features_40)
+            probas_ml = model.predict_proba(features_40)[0]  # Shape: (3,)
 
         elif model_config['type'] == 'ensemble':
             # Ensemble RF + XGBoost (Premier)
@@ -128,31 +130,132 @@ class ModelManager1X2:
             xgb_weight = model_config['xgb_weight']
 
             # Predicciones de cada modelo
-            rf_probas = rf_model.predict_proba(features_40)
-            xgb_probas = xgb_model.predict_proba(features_40)
+            rf_probas = rf_model.predict_proba(features_40)[0]
+            xgb_probas = xgb_model.predict_proba(features_40)[0]
 
             # Weighted average
-            probas = (rf_weight * rf_probas) + (xgb_weight * xgb_probas)
+            probas_ml = (rf_weight * rf_probas) + (xgb_weight * xgb_probas)
 
-        # Aplicar MIN_PROB floor (4%)
+        # ── PASO 2: PROBABILIDADES BASADAS EN ELO PURO ──
+        probas_elo = elo_to_probabilities(elo_diff)  # Shape: (3,)
+
+        # ── PASO 3: CALCULAR PESOS DINÁMICOS ──
+        # Cuanto mayor |elo_diff|, más confiamos en Elo
+        abs_elo_diff = abs(elo_diff)
+        # print(f"[DEBUG BLEND] elo_diff={elo_diff:.1f}, abs={abs_elo_diff:.1f}")
+
+        # Ajuste asimétrico: más peso a Elo cuando local es underdog
+        if elo_diff < -150:  # Local es underdog claro (ej: Oviedo)
+            # print(f"[DEBUG BLEND] → Caso: Local underdog claro")
+            # Penalizar más fuerte: modelo ML tiende a sobreestimar locales débiles
+            weight_elo = min(0.95, 0.50 + (abs_elo_diff / 250.0))
+        elif elo_diff > 200:  # Local es favorito claro (ej: Barcelona, Madrid)
+            # print(f"[DEBUG BLEND] → Caso: Local favorito claro")
+            # Aumentar peso Elo: modelo ML subestima favoritos
+            weight_elo = min(0.90, 0.30 + (abs_elo_diff / 300.0))
+        else:  # Partido equilibrado (-150 < diff < 200)
+            # SUB-CASO: partidos MUY equilibrados → más peso al ML (mejor para empates)
+            if abs(elo_diff) < 80:  # Diferencia < 80 puntos Elo
+                # print(f"[DEBUG BLEND] → Caso: Partido MUY equilibrado (<80)")
+                weight_elo = 0.30  # Invertir: 30% Elo / 70% ML
+            else:  # Equilibrado normal (80-150 puntos)
+                # Balancear modelo ML y Elo
+                # print(f"[DEBUG BLEND] → Caso: Partido equilibrado (80-150)")
+                weight_elo = min(0.75, 0.35 + (abs_elo_diff / 400.0))
+
+        # print(f"[DEBUG BLEND] → weight_elo={weight_elo:.2f}, weight_ml={1 - weight_elo:.2f}")
+        weight_ml = 1.0 - weight_elo
+
+        # ── PASO 4: BLEND BAYESIANO ──
+        # print(f"[DEBUG BLEND] probas_ML:  1={probas_ml[0] * 100:.1f}% X={probas_ml[1] * 100:.1f}% 2={probas_ml[2] * 100:.1f}%")
+        # print(f"[DEBUG BLEND] probas_Elo: 1={probas_elo[0] * 100:.1f}% X={probas_elo[1] * 100:.1f}% 2={probas_elo[2] * 100:.1f}%")
+
+        probas_blended = (weight_ml * probas_ml) + (weight_elo * probas_elo)
+        # print(f"[DEBUG BLEND] probas_BLEND: 1={probas_blended[0] * 100:.1f}% X={probas_blended[1] * 100:.1f}% 2={probas_blended[2] * 100:.1f}%")
+
+        # ── PASO 5: APLICAR MIN_PROB FLOOR ──
         MIN_PROB = 0.04
-        probas = np.maximum(probas, MIN_PROB)
+        probas_blended = np.maximum(probas_blended, MIN_PROB)
 
-        # Re-normalizar
-        probas = probas / probas.sum(axis=1, keepdims=True)
+        # ── PASO 6: RE-NORMALIZAR ──
+        probas_blended = probas_blended / probas_blended.sum()
 
-        # Retornar como dict
+        # ── PASO 7: RETORNAR COMO DICT ──
         # Asumiendo orden: [0=1, 1=X, 2=2]
         return {
-            '1': float(probas[0][0]),
-            'X': float(probas[0][1]),
-            '2': float(probas[0][2])
+            '1': float(probas_blended[0]),
+            'X': float(probas_blended[1]),
+            '2': float(probas_blended[2]),
+            '_debug': {  # Info de diagnóstico (opcional, quitar en prod)
+                'weight_elo': round(weight_elo, 2),
+                'weight_ml': round(weight_ml, 2),
+                'elo_diff': round(elo_diff, 1),
+                'probas_ml': probas_ml.tolist(),
+                'probas_elo': probas_elo.tolist()
+            }
         }
 
 
 # Instancia global
 model_manager_1x2 = ModelManager1X2()
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+# BAYESIAN BLEND: ELO → PROBABILIDADES 1X2
+# ══════════════════════════════════════════════════════════════════════════════
+
+def elo_to_probabilities(elo_diff: float, home_advantage: float = 100) -> np.ndarray:
+    """
+    Convierte diferencia Elo en probabilidades 1X2 usando logística + ajuste gaussiano.
+    VERSIÓN CALIBRADA PARA FÚTBOL (LaLiga específicamente)
+
+    Args:
+        elo_diff: Diferencia elo_home - elo_away
+        home_advantage: Ventaja de jugar en casa (default: 100)
+
+    Returns:
+        np.ndarray [prob_1, prob_X, prob_2] normalizado a suma=1
+    """
+    # ── AJUSTE 1: Home advantage adaptativo (MÁS AGRESIVO) ──
+    # Reducir ventaja local cuando hay mucha diferencia de nivel
+    abs_diff = abs(elo_diff)
+
+    if elo_diff < -250:  # Local es underdog extremo (ej: Oviedo)
+        effective_home_adv = home_advantage * 0.3
+    elif elo_diff < -150:  # Local es underdog claro
+        effective_home_adv = home_advantage * 0.5
+    elif elo_diff < -50:  # Local es underdog moderado ← NUEVO
+        effective_home_adv = home_advantage * 0.35 # 35 puntos
+    elif elo_diff > 300:  # Local es favorito extremo (ej: Madrid)
+        effective_home_adv = home_advantage * 0.6
+    elif elo_diff > 150:  # Local es favorito claro (ej: Barça)
+        effective_home_adv = home_advantage * 0.75
+    elif elo_diff > 50:  # Local es favorito moderado ← NUEVO
+        effective_home_adv = home_advantage * 0.85  # 85 puntos
+    else:  # Partido equilibrado (-50 < diff < 50) ← AJUSTADO
+        effective_home_adv = home_advantage  # 100 puntos
+
+    adjusted_diff = elo_diff + effective_home_adv
+
+    # ── PASO 2: Probabilidad home win (logística) ──
+    exp_home = 1.0 / (1.0 + 10.0 ** (-adjusted_diff / ELO_SCALE))
+
+    # ── PASO 3: Probabilidad empate (gaussiana + floor AUMENTADO) ──
+    # Floor del 15% en LaLiga (liga con muchos empates)
+    prob_draw_gaussian = 0.30 * np.exp(-(adjusted_diff ** 2) / (2 * 200 ** 2))
+    prob_draw = max(0.15, prob_draw_gaussian)  # ← Floor aumentado a 15%
+
+    # ── PASO 4: Probabilidad away win (residual) ──
+    prob_away = 1.0 - exp_home - prob_draw
+
+    # ── PASO 5: Floors mínimos (evitar 0% exacto) ──
+    prob_away = max(0.04, prob_away)
+    exp_home = max(0.04, exp_home)
+
+    # ── PASO 6: Normalizar a suma=1 ──
+    total = exp_home + prob_draw + prob_away
+
+    return np.array([exp_home, prob_draw, prob_away]) / total
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -277,6 +380,8 @@ def _build_elo_cache() -> dict:
         GROUP BY matchId, homeTeam, awayTeam
         ORDER BY Year ASC, CAST(Round AS SIGNED) ASC
     """
+
+    # print(f"[DEBUG] SQL QUERY:\n{sql}\n")
     rows = run_query(sql, ())
     elo: dict = {}
 
@@ -325,6 +430,73 @@ _standings_cache: dict = {}
 _standings_mtime: dict = {}
 _STANDINGS_TTL = 900
 
+# ─────────────────────────────────────────────
+# CACHÉ DE FEATURES POR EQUIPO
+# ─────────────────────────────────────────────
+
+_team_features_cache: dict = {}
+_team_features_mtime: dict = {}
+_TEAM_FEATURES_TTL = 1800  # 30 minutos (actualizar más frecuente que Elo)
+_neighbors_cache = {} # Cache: {(team, year, standings_tuple): [vecinos]}
+
+
+def get_team_features_cached(team: str, role: str, year: Optional[str],
+                             league_id: str, n: int = 5) -> dict:
+    """
+    Wrapper con caché para get_team_features.
+    Cache key: team_role_year_league (ej: "Barcelona_home_25/26_8")
+    """
+    cache_key = f"{team}_{role}_{year}_{league_id}"
+    cache_age = time.time() - _team_features_mtime.get(cache_key, 0)
+
+    # Si está en caché y no expiró, retornar
+    if cache_key in _team_features_cache and cache_age < _TEAM_FEATURES_TTL:
+        return _team_features_cache[cache_key]
+
+    # Si no, calcular y guardar
+    features = get_team_features(team=team, role=role, year=year, league_id=league_id, n=n)
+    _team_features_cache[cache_key] = features
+    _team_features_mtime[cache_key] = time.time()
+
+    return features
+
+
+def get_h2h_features_cached(home_team: str, away_team: str,
+                            league_id: str, year: Optional[str], n: int = 5) -> dict:
+    """
+    Wrapper con caché para H2H.
+    Cache key: home_vs_away_year_league
+    """
+    cache_key = f"{home_team}_vs_{away_team}_{year}_{league_id}_h2h"
+    cache_age = time.time() - _team_features_mtime.get(cache_key, 0)
+
+    if cache_key in _team_features_cache and cache_age < _TEAM_FEATURES_TTL:
+        return _team_features_cache[cache_key]
+
+    features = get_h2h_features(home_team, away_team, league_id, year, n)
+    _team_features_cache[cache_key] = features
+    _team_features_mtime[cache_key] = time.time()
+
+    return features
+
+
+def get_over_rates_cached(home_team: str, away_team: str, year: Optional[str]) -> dict:
+    """
+    Wrapper con caché para over rates.
+    Cache key: home_away_year_over
+    """
+    cache_key = f"{home_team}_{away_team}_{year}_over"
+    cache_age = time.time() - _team_features_mtime.get(cache_key, 0)
+
+    if cache_key in _team_features_cache and cache_age < _TEAM_FEATURES_TTL:
+        return _team_features_cache[cache_key]
+
+    features = get_over_rates(home_team, away_team, year)
+    _team_features_cache[cache_key] = features
+    _team_features_mtime[cache_key] = time.time()
+
+    return features
+
 
 def get_league_standings(league_id: str, year: Optional[str]) -> list:
     if not year:
@@ -346,6 +518,7 @@ def get_league_standings(league_id: str, year: Optional[str]) -> list:
           AND Year = %s
         GROUP BY MatchId, homeTeam, awayTeam
     """
+    # print(f"[DEBUG] SQL QUERY:\n{sql}\n")
     rows = run_query(sql, (league_id, year))
     if not rows:
         _standings_cache[cache_key] = []
@@ -444,6 +617,7 @@ def get_team_stats_weighted(team: str, role: str, year: Optional[str],
             GROUP BY matchId
         ) AS all_matches
     """
+    # print(f"[DEBUG] SQL QUERY:\n{sql_hist}\n")
     rows_hist = run_query(sql_hist, tuple(params_hist))
     historical_avg = float(rows_hist[0]["stat_value"]) if (
                 rows_hist and rows_hist[0]["stat_value"] is not None) else 0.0
@@ -469,6 +643,7 @@ def get_team_stats_weighted(team: str, role: str, year: Optional[str],
             LIMIT %s
         ) AS recent_matches
     """
+    # print(f"[DEBUG] SQL QUERY:\n{sql_recent}\n")
     rows_recent = run_query(sql_recent, tuple(params_recent))
     recent_avg = float(rows_recent[0]["stat_value"]) if (
                 rows_recent and rows_recent[0]["stat_value"] is not None) else 0.0
@@ -479,31 +654,357 @@ def get_team_stats_weighted(team: str, role: str, year: Optional[str],
     return weighted_avg
 
 
-def get_team_features(team: str, role: str, year: Optional[str], n: int = 5) -> dict:
+"""
+VERSIÓN OPTIMIZADA DE get_team_features()
+
+ANTES: 18 queries por equipo (9 stats × 2 queries cada una)
+DESPUÉS: 2 queries por equipo (1 histórico + 1 reciente)
+
+REDUCCIÓN: 90% menos queries
+"""
+
+
+def get_team_features(team: str, role: str, year: Optional[str], league_id: str, n: int = 5) -> dict:
     """
+    Versión OPTIMIZADA: 2 queries en lugar de 18
     Calcula features de equipo con ponderación 65% reciente + 35% histórico.
-    Igual que train_old.py líneas 157-170.
     """
+    # print(f"\n{'=' * 60}")
+    # print(f"[DEBUG] get_team_features LLAMADA")
+    # print(f"  team: {team!r}")
+    # print(f"  role: {role!r}")
+    # print(f"  year: {year!r}")
+    # print(f"  league_id: {league_id!r}")
+    # print(f"  n: {n}")
+    # print(f"{'=' * 60}\n")
+
+    team_col = "homeTeam" if role == "home" else "awayTeam"
+    stat_col = "homeValue" if role == "home" else "awayValue"
+
+    recent_years = get_recent_years(year) if year else []
+
+    if not recent_years:
+        # Sin año, retornar features vacías
+        return {f"{role}_avg_{feat}": 0.0 for feat in FEATURES}
+
+    placeholders_years = ",".join(["%s"] * len(recent_years))
+    year_filter = f"AND Year IN ({placeholders_years})"
+
+    # ══════════════════════════════════════════════════════════════════════
+    # QUERY 1: HISTÓRICO COMPLETO (todas las stats en una sola query)
+    # ══════════════════════════════════════════════════════════════════════
+    sql_hist = f"""
+        SELECT 
+            AVG(goals) AS goals,
+            AVG(ball_possession) AS ball_possession,
+            AVG(total_shots) AS total_shots,
+            AVG(shots_on_target) AS shots_on_target,
+            AVG(gk_saves) AS gk_saves,
+            AVG(big_chances) AS big_chances,
+            AVG(accurate_passes) AS accurate_passes,
+            AVG(tackles_won) AS tackles_won,
+            AVG(interceptions) AS interceptions,
+            AVG(blocked_shots) AS blocked_shots
+        FROM (
+            SELECT matchId,
+                   MAX(CASE WHEN name='Goals' AND period IN ('1ST','2ND') 
+                       THEN CAST({stat_col} AS DECIMAL) END) AS goals,
+                   MAX(CASE WHEN name='Ball possession' AND period IN ('1ST','2ND') 
+                       THEN CAST({stat_col} AS DECIMAL) END) AS ball_possession,
+                   MAX(CASE WHEN name='Total shots' AND period IN ('1ST','2ND') 
+                       THEN CAST({stat_col} AS DECIMAL) END) AS total_shots,
+                   MAX(CASE WHEN name='Shots on target' AND period IN ('1ST','2ND') 
+                       THEN CAST({stat_col} AS DECIMAL) END) AS shots_on_target,
+                   MAX(CASE WHEN name='Goalkeeper saves' AND period IN ('1ST','2ND') 
+                       THEN CAST({stat_col} AS DECIMAL) END) AS gk_saves,
+                   MAX(CASE WHEN name='Big chances' AND period IN ('1ST','2ND') 
+                       THEN CAST({stat_col} AS DECIMAL) END) AS big_chances,
+                   MAX(CASE WHEN name='Accurate passes' AND period IN ('1ST','2ND') 
+                       THEN CAST({stat_col} AS DECIMAL) END) AS accurate_passes,
+                   MAX(CASE WHEN name='Tackles won' AND period IN ('1ST','2ND') 
+                       THEN CAST({stat_col} AS DECIMAL) END) AS tackles_won,
+                   MAX(CASE WHEN name='Interceptions' AND period IN ('1ST','2ND') 
+                       THEN CAST({stat_col} AS DECIMAL) END) AS interceptions,
+                   MAX(CASE WHEN name='Blocked shots' AND period IN ('1ST','2ND') 
+                       THEN CAST({stat_col} AS DECIMAL) END) AS blocked_shots
+            FROM {TABLE}
+            WHERE {team_col} = %s
+              AND period IN ('1ST', '2ND')
+              {year_filter}
+            GROUP BY matchId
+        ) AS all_matches
+    """
+    params_hist = [team] + recent_years
+    # print(f"[DEBUG] SQL QUERY:\n{sql_hist}\n")
+    rows_hist = run_query(sql_hist, tuple(params_hist))
+
+    # ══════════════════════════════════════════════════════════════════════
+    # QUERY 2: FORMA RECIENTE (últimos n partidos)
+    # ══════════════════════════════════════════════════════════════════════
+    sql_recent = f"""
+        SELECT 
+            AVG(goals) AS goals,
+            AVG(ball_possession) AS ball_possession,
+            AVG(total_shots) AS total_shots,
+            AVG(shots_on_target) AS shots_on_target,
+            AVG(gk_saves) AS gk_saves,
+            AVG(big_chances) AS big_chances,
+            AVG(accurate_passes) AS accurate_passes,
+            AVG(tackles_won) AS tackles_won,
+            AVG(interceptions) AS interceptions,
+            AVG(blocked_shots) AS blocked_shots
+        FROM (
+            SELECT matchId,
+                   MAX(CASE WHEN name='Goals' AND period IN ('1ST','2ND') 
+                       THEN CAST({stat_col} AS DECIMAL) END) AS goals,
+                   MAX(CASE WHEN name='Ball possession' AND period IN ('1ST','2ND') 
+                       THEN CAST({stat_col} AS DECIMAL) END) AS ball_possession,
+                   MAX(CASE WHEN name='Total shots' AND period IN ('1ST','2ND') 
+                       THEN CAST({stat_col} AS DECIMAL) END) AS total_shots,
+                   MAX(CASE WHEN name='Shots on target' AND period IN ('1ST','2ND') 
+                       THEN CAST({stat_col} AS DECIMAL) END) AS shots_on_target,
+                   MAX(CASE WHEN name='Goalkeeper saves' AND period IN ('1ST','2ND') 
+                       THEN CAST({stat_col} AS DECIMAL) END) AS gk_saves,
+                   MAX(CASE WHEN name='Big chances' AND period IN ('1ST','2ND') 
+                       THEN CAST({stat_col} AS DECIMAL) END) AS big_chances,
+                   MAX(CASE WHEN name='Accurate passes' AND period IN ('1ST','2ND') 
+                       THEN CAST({stat_col} AS DECIMAL) END) AS accurate_passes,
+                   MAX(CASE WHEN name='Tackles won' AND period IN ('1ST','2ND') 
+                       THEN CAST({stat_col} AS DECIMAL) END) AS tackles_won,
+                   MAX(CASE WHEN name='Interceptions' AND period IN ('1ST','2ND') 
+                       THEN CAST({stat_col} AS DECIMAL) END) AS interceptions,
+                   MAX(CASE WHEN name='Blocked shots' AND period IN ('1ST','2ND') 
+                       THEN CAST({stat_col} AS DECIMAL) END) AS blocked_shots
+            FROM {TABLE}
+            WHERE {team_col} = %s
+              AND period IN ('1ST', '2ND')
+              {year_filter}
+            GROUP BY matchId
+            ORDER BY MAX(Year) DESC, MAX(CAST(Round AS SIGNED)) DESC
+            LIMIT %s
+        ) AS recent_matches
+    """
+    params_recent = [team] + recent_years + [n]
+    # print(f"[DEBUG] SQL QUERY:\n{sql_recent}\n")
+    rows_recent = run_query(sql_recent, tuple(params_recent))
+
+    # ══════════════════════════════════════════════════════════════════════
+    # PONDERACIÓN 65% reciente + 35% histórico
+    # ══════════════════════════════════════════════════════════════════════
     features = {}
 
-    STAT_NAME_MAP = {
-        "Expected goals": f"{role}_avg_xG",
-        "Total shots": f"{role}_avg_shots",
-        "Big chances": f"{role}_avg_big_chances",
+    # Mapeo entre nombres SQL (snake_case) y nombres de features
+    stat_mapping = {
+        'goals': 'Goals',
+        'ball_possession': 'Ball possession',
+        'total_shots': 'Total shots',
+        'shots_on_target': 'Shots on target',
+        'gk_saves': 'Goalkeeper saves',
+        'big_chances': 'Big chances',
+        'accurate_passes': 'Accurate passes',
+        'tackles_won': 'Tackles won',
+        'interceptions': 'Interceptions',
+        'blocked_shots': 'Blocked shots'
     }
 
-    # Calcular cada feature con ponderación
-    for feat in FEATURES:
-        weighted_val = get_team_stats_weighted(team, role, year, feat, n)
-        features[f"{role}_avg_{feat}"] = weighted_val
+    for sql_col, feat_name in stat_mapping.items():
+        hist_avg = float(rows_hist[0][sql_col] or 0) if rows_hist and rows_hist[0][sql_col] is not None else 0.0
+        recent_avg = float(rows_recent[0][sql_col] or 0) if rows_recent and rows_recent[0][sql_col] is not None else 0.0
 
-        if feat in STAT_NAME_MAP:
-            features[STAT_NAME_MAP[feat]] = weighted_val
+        weighted_avg = float(RECENT_WEIGHT) * recent_avg + float(HISTORICAL_WEIGHT) * hist_avg
+        features[f"{role}_avg_{feat_name}"] = weighted_avg
 
-    # Goals es especial (se usa mucho)
-    features[f"{role}_avg_goals_scored"] = get_team_stats_weighted(team, role, year, "Goals", n)
+    # Aliases especiales (mantener compatibilidad con código existente)
+    features[f"{role}_avg_xG"] = features.get(f"{role}_avg_Expected goals", 0)
+    features[f"{role}_avg_shots"] = features.get(f"{role}_avg_Total shots", 0)
+    features[f"{role}_avg_big_chances"] = features.get(f"{role}_avg_Big chances", 0)
+    features[f"{role}_avg_goals_scored"] = features.get(f"{role}_avg_Goals", 0)
+
+    # ══════════════════════════════════════════════════════════════════════
+    # AÑADIR FORM FEATURES INLINE (win_rate, form_pts, goals_conceded)
+    # ══════════════════════════════════════════════════════════════════════
+    form_features = _get_form_features_inline(team, role, year, league_id, n,
+                                              year_filter, recent_years)
+    features.update(form_features)
 
     return features
+
+
+def _get_form_features_inline(team: str, role: str, year: Optional[str],
+                              league_id: str, n: int, year_filter: str,
+                              recent_years: list) -> dict:
+    """
+    Helper interno para calcular win_rate, form_pts y goals_conceded
+    en la misma función get_team_features (evitar queries duplicadas)
+
+    Añade 4 queries más por equipo:
+    - 2 para win rates (histórico + reciente)
+    - 2 para goals conceded (histórico + reciente)
+
+    Total: 2 + 4 = 6 queries por equipo (vs 18 anterior)
+    """
+    # ← AÑADIR ESTOS PRINTS
+    # print(f"🔍 _get_form_features_inline CALLED:")
+    # print(f"   team={repr(team)}")
+    # print(f"   role={role}")
+    # print(f"   league_id={league_id}")
+    # print(f"   year_filter={repr(year_filter)}")
+    # print(f"   recent_years={recent_years}")
+    # print(f"   n={n}")
+
+    team_col = "homeTeam" if role == "home" else "awayTeam"
+    goals_col = "awayValue" if role == "home" else "homeValue"  # Goles concedidos
+
+    # ── WIN RATES HISTÓRICO ──
+    sql_hist_wr = f"""
+        SELECT 
+            SUM(CASE WHEN home_goals > away_goals THEN 1 ELSE 0 END) AS wins,
+            SUM(CASE WHEN home_goals = away_goals THEN 1 ELSE 0 END) AS draws,
+            SUM(CASE WHEN home_goals < away_goals THEN 1 ELSE 0 END) AS losses,
+            COUNT(*) AS total
+        FROM (
+            SELECT matchId,
+                   SUM(CASE WHEN name='Goals' AND period IN ('1ST','2ND') THEN CAST(homeValue AS DECIMAL) ELSE 0 END) AS home_goals,
+                   SUM(CASE WHEN name='Goals' AND period IN ('1ST','2ND') THEN CAST(awayValue AS DECIMAL) ELSE 0 END) AS away_goals
+            FROM {TABLE}
+            WHERE {team_col} = %s
+              AND name = 'Goals'
+              AND LeagueId = %s
+              {year_filter}
+            GROUP BY matchId
+        ) AS matches
+    """
+
+    # Construir params usando recent_years pasado como parámetro
+    if recent_years:
+        params_hist_wr = [team, league_id] + recent_years
+    else:
+        params_hist_wr = [team, league_id]
+
+    # print(f"[DEBUG] SQL QUERY:\n{sql_hist_wr}\n")
+    rows_hist_wr = run_query(sql_hist_wr, tuple(params_hist_wr))
+
+    # ── WIN RATES RECIENTE ──
+    sql_recent_wr = f"""
+        SELECT 
+            SUM(CASE WHEN home_goals > away_goals THEN 1 ELSE 0 END) AS wins,
+            SUM(CASE WHEN home_goals = away_goals THEN 1 ELSE 0 END) AS draws,
+            SUM(CASE WHEN home_goals < away_goals THEN 1 ELSE 0 END) AS losses,
+            COUNT(*) AS total
+        FROM (
+            SELECT matchId,
+                   SUM(CASE WHEN name='Goals' AND period IN ('1ST','2ND') THEN CAST(homeValue AS DECIMAL) ELSE 0 END) AS home_goals,
+                   SUM(CASE WHEN name='Goals' AND period IN ('1ST','2ND') THEN CAST(awayValue AS DECIMAL) ELSE 0 END) AS away_goals
+            FROM {TABLE}
+            WHERE {team_col} = %s
+              AND name = 'Goals'
+              AND LeagueId = %s
+              {year_filter}
+            GROUP BY matchId
+            ORDER BY MAX(Year) DESC, MAX(CAST(Round AS SIGNED)) DESC
+            LIMIT %s
+        ) AS recent
+    """
+
+    if recent_years:
+        params_recent_wr = [team, league_id] + recent_years + [n]
+    else:
+        params_recent_wr = [team, league_id, n]
+
+    # print(f"[DEBUG] SQL QUERY:\n{sql_recent_wr}\n")
+    rows_recent_wr = run_query(sql_recent_wr, tuple(params_recent_wr))
+
+    # Calcular win rates
+    if not rows_hist_wr or rows_hist_wr[0]["total"] == 0:
+        hist_win_rate = hist_draw_rate = hist_loss_rate = 0
+    else:
+        total_hist = float(rows_hist_wr[0]["total"])
+        if role == "home":
+            hist_win_rate = float(rows_hist_wr[0]["wins"]) / total_hist
+            hist_draw_rate = float(rows_hist_wr[0]["draws"]) / total_hist
+            hist_loss_rate = float(rows_hist_wr[0]["losses"]) / total_hist
+        else:
+            hist_win_rate = float(rows_hist_wr[0]["losses"]) / total_hist
+            hist_draw_rate = float(rows_hist_wr[0]["draws"]) / total_hist
+            hist_loss_rate = float(rows_hist_wr[0]["wins"]) / total_hist
+
+    if not rows_recent_wr or rows_recent_wr[0]["total"] == 0:
+        recent_win_rate = recent_draw_rate = recent_loss_rate = 0
+        form_pts = 0
+    else:
+        total_recent = float(rows_recent_wr[0]["total"])
+        if role == "home":
+            recent_win_rate = float(rows_recent_wr[0]["wins"]) / total_recent
+            recent_draw_rate = float(rows_recent_wr[0]["draws"]) / total_recent
+            recent_loss_rate = float(rows_recent_wr[0]["losses"]) / total_recent
+            form_pts = int(rows_recent_wr[0]["wins"]) * 3 + int(rows_recent_wr[0]["draws"])
+        else:
+            recent_win_rate = float(rows_recent_wr[0]["losses"]) / total_recent
+            recent_draw_rate = float(rows_recent_wr[0]["draws"]) / total_recent
+            recent_loss_rate = float(rows_recent_wr[0]["wins"]) / total_recent
+            form_pts = int(rows_recent_wr[0]["losses"]) * 3 + int(rows_recent_wr[0]["draws"])
+
+    # ── GOLES CONCEDIDOS HISTÓRICO ──
+    sql_conceded_hist = f"""
+        SELECT AVG(CAST({goals_col} AS DECIMAL)) AS avg_conceded
+        FROM (
+            SELECT matchId,
+                   SUM(CAST({goals_col} AS DECIMAL)) AS {goals_col}
+            FROM {TABLE}
+            WHERE {team_col} = %s
+              AND name = 'Goals'
+              AND period IN ('1ST', '2ND')
+              {year_filter}
+            GROUP BY matchId
+        ) AS all_matches
+    """
+
+    if recent_years:
+        params_conceded_hist = [team] + recent_years
+    else:
+        params_conceded_hist = [team]
+
+    # print(f"[DEBUG] SQL QUERY:\n{sql_conceded_hist}\n")
+    rows_conceded_hist = run_query(sql_conceded_hist, tuple(params_conceded_hist))
+    hist_conceded = float(rows_conceded_hist[0]["avg_conceded"]) if (
+            rows_conceded_hist and rows_conceded_hist[0]["avg_conceded"] is not None) else 0.0
+
+    # ── GOLES CONCEDIDOS RECIENTE ──
+    sql_conceded_recent = f"""
+        SELECT AVG(CAST({goals_col} AS DECIMAL)) AS avg_conceded
+        FROM (
+            SELECT matchId,
+                   SUM(CAST({goals_col} AS DECIMAL)) AS {goals_col}
+            FROM {TABLE}
+            WHERE {team_col} = %s
+              AND name = 'Goals'
+              AND period IN ('1ST', '2ND')
+              {year_filter}
+            GROUP BY matchId
+            ORDER BY MAX(Year) DESC, MAX(CAST(Round AS SIGNED)) DESC
+            LIMIT %s
+        ) AS recent_matches
+    """
+
+    if recent_years:
+        params_conceded_recent = [team] + recent_years + [n]
+    else:
+        params_conceded_recent = [team, n]
+
+    # print(f"[DEBUG] SQL QUERY:\n{sql_conceded_recent}\n")
+    rows_conceded_recent = run_query(sql_conceded_recent, tuple(params_conceded_recent))
+    recent_conceded = float(rows_conceded_recent[0]["avg_conceded"]) if (
+            rows_conceded_recent and rows_conceded_recent[0]["avg_conceded"] is not None) else 0.0
+
+    # Retornar features consolidadas
+    return {
+        f"{role}_win_rate_{role}": WIN_RATE_RECENT_WEIGHT * recent_win_rate + WIN_RATE_HISTORICAL_WEIGHT * hist_win_rate,
+        f"{role}_draw_rate_{role}": WIN_RATE_RECENT_WEIGHT * recent_draw_rate + WIN_RATE_HISTORICAL_WEIGHT * hist_draw_rate,
+        f"{role}_loss_rate_{role}": WIN_RATE_RECENT_WEIGHT * recent_loss_rate + WIN_RATE_HISTORICAL_WEIGHT * hist_loss_rate,
+        f"{role}_form_pts": form_pts,
+        f"{role}_avg_goals_conceded_global": float(RECENT_WEIGHT) * recent_conceded + float(
+            HISTORICAL_WEIGHT) * hist_conceded,
+    }
 
 
 def get_team_season_count(team: str, year: Optional[str]) -> int:
@@ -518,32 +1019,57 @@ def get_team_season_count(team: str, year: Optional[str]) -> int:
         WHERE (homeTeam = %s OR awayTeam = %s)
           AND Year IN ({placeholders_years})
     """
+
+    # print(f"[DEBUG] SQL QUERY:\n{sql}\n")
     rows = run_query(sql, tuple([team, team] + recent_years))
     return int(rows[0]["season_count"]) if rows else 0
 
 
 def get_neighbors(team: str, year: Optional[str], standings: list, n_neighbors: int = 3) -> list:
-    """Devuelve equipos vecinos en tabla con histórico >= 2 temporadas."""
+    """Devuelve equipos vecinos en tabla con histórico >= 2 temporadas (con caché)."""
+    # Cache key: depende del equipo, año y clasificación
+    standings_tuple = tuple(t["team"] for t in standings)  # ← CORREGIDO
+    cache_key = (team, year, standings_tuple)
+
+    if cache_key in _neighbors_cache:
+        return _neighbors_cache[cache_key]
+
     pos = next((i for i, t in enumerate(standings) if t["team"] == team), None)
     if pos is None:
         return []
+
     candidates = []
     for i, t in enumerate(standings):
         if t["team"] == team:
             continue
         if get_team_season_count(t["team"], year) >= 2:
             candidates.append((abs(i - pos), t["team"]))
+
     candidates.sort(key=lambda x: x[0])
-    return [name for _, name in candidates[:n_neighbors]]
+    result = [name for _, name in candidates[:n_neighbors]]
+
+    # Guardar en caché
+    _neighbors_cache[cache_key] = result
+    return result
 
 
 def get_features_from_neighbors(team: str, role: str, year: Optional[str],
                                 league_id: str, standings: list) -> dict:
     """Estima features usando vecinos cuando el equipo no tiene histórico."""
+    t_start = time.time()  # ← AÑADIR
+
     closest = get_neighbors(team, year, standings)
     if not closest:
         return {}
-    all_features = [f for f in [get_team_features(n, role, year) for n in closest] if f]
+
+    t_neighbors = time.time()
+    # print(f"⏱️  get_neighbors: {(t_neighbors - t_start) * 1000:.0f}ms")
+
+    all_features = [f for f in [get_team_features_cached(team=neighbor, role=role, year=year, league_id=league_id, n=5) for neighbor in closest] if f]
+
+    t_features = time.time()
+    # print(f"⏱️  get_team_features x{len(closest)}: {(t_features - t_neighbors) * 1000:.0f}ms")
+
     if not all_features:
         return {}
     merged = {}
@@ -551,9 +1077,20 @@ def get_features_from_neighbors(team: str, role: str, year: Optional[str],
         vals = [f[key] for f in all_features if key in f]
         if vals:
             merged[key] = sum(vals) / len(vals)
-    print(f"⚠️  {team} sin histórico — proxy de vecinos: {closest}")
-    return merged
 
+    # ── PENALTY PARA EQUIPOS RECIÉN ASCENDIDOS ──
+    # Reducir stats en ~25% porque equipos promovidos suelen rendir peor
+    PROMOTED_TEAM_PENALTY = 0.75
+
+    # Aplicar penalty a todas las features EXCEPTO Elo (que tiene su propia lógica)
+    keys_to_penalize = [k for k in merged.keys() if 'elo' not in k.lower()]
+    for key in keys_to_penalize:
+        merged[key] *= PROMOTED_TEAM_PENALTY
+
+    # print(f"⚠️  {team} sin histórico — proxy de vecinos con penalty 25%: {closest}")
+    t_end = time.time()
+    # print(f"⏱️  TOTAL get_features_from_neighbors: {(t_end - t_start) * 1000:.0f}ms")
+    return merged
 
 # ─────────────────────────────────────────────
 # FORM FEATURES CON PONDERACIÓN
@@ -597,6 +1134,7 @@ def get_win_rates_weighted(team: str, role: str, year: Optional[str],
             GROUP BY matchId
         ) AS matches
     """
+    # print(f"[DEBUG] SQL QUERY:\n{sql_hist}\n")
     rows_hist = run_query(sql_hist, tuple(params_hist))
 
     if not rows_hist or rows_hist[0]["total"] == 0:
@@ -638,6 +1176,7 @@ def get_win_rates_weighted(team: str, role: str, year: Optional[str],
             LIMIT %s
         ) AS recent
     """
+    # print(f"[DEBUG] SQL QUERY:\n{sql_recent}\n")
     rows_recent = run_query(sql_recent, tuple(params_recent))
 
     if not rows_recent or rows_recent[0]["total"] == 0:
@@ -696,6 +1235,7 @@ def get_form_points(team: str, role: str, year: Optional[str],
             LIMIT %s
         ) AS recent
     """
+    # print(f"[DEBUG] SQL QUERY:\n{sql}\n")
     rows = run_query(sql, tuple(params))
 
     if not rows:
@@ -726,6 +1266,7 @@ def get_form_points(team: str, role: str, year: Optional[str],
                 LIMIT %s
             ) AS recent
         """
+        # print(f"[DEBUG] SQL QUERY:\n{sql_away}\n")
         rows_away = run_query(sql_away, tuple(params))
         points = int(rows_away[0]["points"] or 0) if rows_away else 0
 
@@ -768,6 +1309,8 @@ def get_goals_conceded_weighted(team: str, role: str, year: Optional[str], n: in
             GROUP BY matchId
         ) AS all_matches
     """
+
+    # print(f"[DEBUG] SQL QUERY:\n{sql_hist}\n")
     rows_hist = run_query(sql_hist, tuple(params_hist))
     hist_avg = float(rows_hist[0]["avg_conceded"]) if (rows_hist and rows_hist[0]["avg_conceded"] is not None) else 0.0
 
@@ -792,6 +1335,8 @@ def get_goals_conceded_weighted(team: str, role: str, year: Optional[str], n: in
             LIMIT %s
         ) AS recent_matches
     """
+
+    # print(f"[DEBUG] SQL QUERY:\n{sql_recent}\n")
     rows_recent = run_query(sql_recent, tuple(params_recent))
     recent_avg = float(rows_recent[0]["avg_conceded"]) if (
                 rows_recent and rows_recent[0]["avg_conceded"] is not None) else 0.0
@@ -841,6 +1386,8 @@ def get_h2h_features(home_team: str, away_team: str, league_id: str,
         ORDER BY MAX(Year) DESC, MAX(CAST(Round AS SIGNED)) DESC
         LIMIT %s
     """
+
+    # print(f"[DEBUG] SQL QUERY:\n{sql}\n")
     rows = run_query(sql, (home_team, away_team, away_team, home_team, n))
 
     # Proxy con vecinos si < 2 enfrentamientos
@@ -866,10 +1413,14 @@ def get_h2h_features(home_team: str, away_team: str, league_id: str,
                     ORDER BY MAX(Year) DESC, MAX(CAST(Round AS SIGNED)) DESC
                     LIMIT %s
                 """
+
+                # print(f"[DEBUG] SQL QUERY:\n{sql_proxy}\n")
                 rows = run_query(sql_proxy, tuple(home_neighbors + away_neighbors + [n]))
 
                 if rows:
-                    print(f"⚠️  H2H {home_team} vs {away_team}: usando proxy de vecinos")
+                    pass
+                    # TODO
+                    # print(f"⚠️  H2H {home_team} vs {away_team}: usando proxy de vecinos")
 
     if not rows:
         return {"h2h_home_wins": 0.33, "h2h_draws": 0.33, "h2h_away_wins": 0.33, "h2h_avg_goals": 0}
@@ -931,6 +1482,8 @@ def get_over_rates_weighted(team: str, year: Optional[str], n: int = 5) -> dict:
           {year_filter}
         GROUP BY matchId
     """
+
+    # print(f"[DEBUG] SQL QUERY:\n{sql_hist}\n")
     rows_hist = run_query(sql_hist, tuple(params_hist))
 
     # ── FORMA RECIENTE ──
@@ -951,6 +1504,8 @@ def get_over_rates_weighted(team: str, year: Optional[str], n: int = 5) -> dict:
         ORDER BY MAX(Year) DESC, MAX(CAST(Round AS SIGNED)) DESC
         LIMIT %s
     """
+
+    # print(f"[DEBUG] SQL QUERY:\n{sql_recent}\n")
     rows_recent = run_query(sql_recent, tuple(params_recent))
 
     features = {}
@@ -1002,7 +1557,7 @@ def build_features(home_team: str, away_team: str, year: Optional[str],
         if season_count < 2 and standings:
             team_features = get_features_from_neighbors(team, role, year, league_id, standings)
         else:
-            team_features = get_team_features(team, role, year, n=5)
+            team_features = get_team_features_cached(team=team, role=role, year=year, league_id=league_id, n=5)
         features.update(team_features)
 
     # Form features con ponderación
@@ -1037,41 +1592,38 @@ def build_features_1x2(home_team: str, away_team: str, year: Optional[str],
                        league_id: str = "8") -> np.ndarray:
     """
     Construye vector de 40 features para modelos 1X2 (RF/XGBoost)
-
-    IMPORTANTE: Este vector debe tener EXACTAMENTE las mismas 40 features
-    que se usaron en train.py y train_xgboost.py
-
-    Returns:
-        np.ndarray de shape (1, 40)
+    VERSIÓN OPTIMIZADA CON CACHÉ
     """
     features = {}
     standings = get_league_standings(league_id, year) if year else []
 
-    # ── 1. FEATURES ELO (3 features) ──
+    # ── 1. FEATURES ELO (3 features) - YA TIENE CACHÉ ──
     elo_data = get_elo(home_team, away_team)
     features['elo_home'] = elo_data['elo_home']
     features['elo_away'] = elo_data['elo_away']
     features['elo_diff'] = elo_data['elo_diff']
 
-    # ── 2. FEATURES DE EQUIPO CON PONDERACIÓN (26 features = 13 x 2) ──
+    # print(f"[DEBUG ELO] home_team={home_team}, home_elo={features['elo_home']}")
+    # print(f"[DEBUG ELO] away_team={away_team}, away_elo={features['elo_away']}")
+    # print(f"[DEBUG ELO] elo_diff={features['elo_diff']}")
+
+    # ── 2. FEATURES DE EQUIPO CON CACHÉ (26 features = 13 x 2) ──
     for team, role in [(home_team, "home"), (away_team, "away")]:
         season_count = get_team_season_count(team, year) if year else 2
 
         if season_count < 2 and standings:
-            # Usar proxy si no hay histórico
+            # Usar proxy si no hay histórico (NO cachear proxies)
             team_features = get_features_from_neighbors(team, role, year, league_id, standings)
         else:
-            team_features = get_team_features(team, role, year, n=5)
+            # ← USAR CACHÉ AQUÍ
+            team_features = get_team_features_cached(team, role, year, league_id, n=5)
 
-        # Extraer solo las features que necesitamos (las 13 por equipo)
-        # BÁSICAS (4): win_rate, goals_for, goals_against, points
+        # Extraer features (igual que antes)
         features[f'{role}_win_rate'] = team_features.get(f'{role}_win_rate_{role}', 0)
         features[f'{role}_goals_for_avg'] = team_features.get(f'{role}_avg_goals_scored', 0)
         features[f'{role}_goals_against_avg'] = team_features.get(f'{role}_avg_goals_conceded_global', 0)
-        features[f'{role}_points_avg'] = team_features.get(f'{role}_form_pts', 0) / 5.0  # Normalizar a avg
+        features[f'{role}_points_avg'] = team_features.get(f'{role}_form_pts', 0) / 5.0
 
-        # AVANZADAS (9): shots_on_target, possession, total_shots, gk_saves,
-        #                big_chances, accurate_passes, tackles_won, interceptions, blocked_shots
         features[f'{role}_shots_on_target_avg'] = team_features.get(f'{role}_avg_Shots on target', 0)
         features[f'{role}_possession_avg'] = team_features.get(f'{role}_avg_Ball possession', 0)
         features[f'{role}_total_shots_avg'] = team_features.get(f'{role}_avg_Total shots', 0)
@@ -1082,13 +1634,13 @@ def build_features_1x2(home_team: str, away_team: str, year: Optional[str],
         features[f'{role}_interceptions_avg'] = team_features.get(f'{role}_avg_Interceptions', 0)
         features[f'{role}_blocked_shots_avg'] = team_features.get(f'{role}_avg_Blocked shots', 0)
 
-    # ── 3. FEATURES H2H (5 features) ──
-    h2h = get_h2h_features(home_team, away_team, league_id, year, n=5)
+    # ── 3. FEATURES H2H CON CACHÉ (5 features) ──
+    h2h = get_h2h_features_cached(home_team, away_team, league_id, year, n=5)
     features['h2h_home_win_rate'] = h2h.get('h2h_home_wins', 0.33)
-    features['h2h_home_goals_avg'] = h2h.get('h2h_avg_goals', 0) / 2  # Aprox goles local
-    features['h2h_away_goals_avg'] = h2h.get('h2h_avg_goals', 0) / 2  # Aprox goles visitante
+    features['h2h_home_goals_avg'] = h2h.get('h2h_avg_goals', 0) / 2
+    features['h2h_away_goals_avg'] = h2h.get('h2h_avg_goals', 0) / 2
     features['h2h_total_goals_avg'] = h2h.get('h2h_avg_goals', 0)
-    features['h2h_used_proxy'] = 1 if len(h2h) < 2 else 0  # Indicador proxy
+    features['h2h_used_proxy'] = 1 if len(h2h) < 2 else 0
 
     # ── 4. FEATURES DE BALANCE (6 features) ──
     features['elo_diff_abs'] = abs(features['elo_diff'])
@@ -1099,39 +1651,24 @@ def build_features_1x2(home_team: str, away_team: str, year: Optional[str],
     features['shots_on_target_balance'] = abs(
         features['home_shots_on_target_avg'] - features['away_shots_on_target_avg'])
 
-    # ── 5. CONVERTIR A NUMPY ARRAY EN ORDEN CORRECTO (40 features) ──
+    # ── 5. CONVERTIR A NUMPY ARRAY (40 features) ──
     feature_order = [
-        # Elo (3)
         'elo_home', 'elo_away', 'elo_diff',
-
-        # Home básicas (4)
         'home_win_rate', 'home_goals_for_avg', 'home_goals_against_avg', 'home_points_avg',
-
-        # Home avanzadas (9)
         'home_shots_on_target_avg', 'home_possession_avg', 'home_total_shots_avg',
         'home_gk_saves_avg', 'home_big_chances_avg', 'home_accurate_passes_avg',
         'home_tackles_won_avg', 'home_interceptions_avg', 'home_blocked_shots_avg',
-
-        # Away básicas (4)
         'away_win_rate', 'away_goals_for_avg', 'away_goals_against_avg', 'away_points_avg',
-
-        # Away avanzadas (9)
         'away_shots_on_target_avg', 'away_possession_avg', 'away_total_shots_avg',
         'away_gk_saves_avg', 'away_big_chances_avg', 'away_accurate_passes_avg',
         'away_tackles_won_avg', 'away_interceptions_avg', 'away_blocked_shots_avg',
-
-        # H2H (5)
         'h2h_home_win_rate', 'h2h_home_goals_avg', 'h2h_away_goals_avg',
         'h2h_total_goals_avg', 'h2h_used_proxy',
-
-        # Balance (6)
         'elo_diff_abs', 'form_balance', 'goals_balance',
         'possession_balance', 'shots_balance', 'shots_on_target_balance'
     ]
 
-    # Construir array
     feature_vector = np.array([[features.get(col, 0.0) for col in feature_order]], dtype=np.float64)
-
     return feature_vector
 
 
@@ -1139,17 +1676,52 @@ def build_features_1x2(home_team: str, away_team: str, year: Optional[str],
 # CONFIDENCE
 # ─────────────────────────────────────────────
 
-def get_match_confidence(elo_diff: float, threshold: float) -> dict:
-    abs_diff = abs(elo_diff)
-    is_clear_favorite = abs_diff >= threshold
-    confidence_score = min(round((abs_diff / 200) * 100, 1), 100.0)
+def get_match_confidence(probabilities: dict, elo_diff: float, league_id: str) -> dict:
+    """
+    Calcula confianza basándose en el GAP entre probabilidades + ajuste por liga.
+    Args:
+        probabilities: dict con keys "1", "X", "2"
+        elo_diff: Diferencia Elo (solo informativo)
+        league_id: ID de la liga para ajustar umbrales
+    """
+    probs = [probabilities["1"], probabilities["X"], probabilities["2"]]
+    sorted_probs = sorted(probs, reverse=True)
+    max_prob = sorted_probs[0]
+    second_prob = sorted_probs[1]
+    gap = max_prob - second_prob
+
+    # Umbrales de GAP por liga (LaLiga más empates, Premier más definido)
+    gap_thresholds = {
+        "8": {"very_high": 35, "high": 18, "medium": 7},  # LaLiga (más empates)
+        "17": {"very_high": 31, "high": 15, "medium": 5},  # Premier (más definido)
+        "23": {"very_high": 33, "high": 17, "medium": 6}  # Serie A (intermedio)
+    }
+    thresholds = gap_thresholds.get(league_id, gap_thresholds["8"])
+
+    # Confidence score basado en Elo
+    confidence_score = min(round((abs(elo_diff) / 200) * 100, 1), 100.0)
+
+    # Clasificación basada en GAP de probabilidades
+    if gap >= thresholds["very_high"]:
+        level = "very_high"
+        description = "Favorito muy claro"
+    elif gap >= thresholds["high"]:
+        level = "high"
+        description = "Favorito claro"
+    elif gap >= thresholds["medium"]:
+        level = "medium"
+        description = "Ligero favorito"
+    else:
+        level = "low"
+        description = "Partido equilibrado"
+
     return {
-        "level": "high" if is_clear_favorite else "balanced",
+        "level": level,
         "score": confidence_score,
         "elo_diff": round(elo_diff, 1),
-        "description": "Favorito claro" if is_clear_favorite else "Partido equilibrado",
+        "gap": round(gap, 2),
+        "description": description,
     }
-
 
 # ─────────────────────────────────────────────
 # ENDPOINT
@@ -1164,7 +1736,7 @@ class PredictionRequest(BaseModel):
 
 @app.post("/predict")
 def predict(req: PredictionRequest):
-    model_result, calibrated_model, label_encoder, feature_cols, elo_threshold, over_models = load_models(req.league_id)
+    # model_result, calibrated_model, label_encoder, feature_cols, elo_threshold, over_models = load_models(req.league_id)
 
     try:
         # ── NUEVAS FEATURES PARA 1X2 (40 dimensiones) ──
@@ -1177,11 +1749,16 @@ def predict(req: PredictionRequest):
     # PREDICCIÓN 1X2 CON NUEVOS MODELOS (RF o Ensemble según liga)
     # ══════════════════════════════════════════════════════════════════════════
 
-    result_proba_new = model_manager_1x2.predict_1x2(req.league_id, X_1x2)
+    # Extraer elo_diff de X_1x2 ANTES de llamar predict_1x2
+    elo_diff = float(X_1x2[0, 2])  # Posición 2 = elo_diff en feature_order
+
+    # Llamar con blend dinámico
+    result_proba_new = model_manager_1x2.predict_1x2(req.league_id, X_1x2, elo_diff)
 
     # Convertir a porcentajes
     result_proba = {
         k: round(v * 100, 4) for k, v in result_proba_new.items()
+        if k != '_debug'  # ← FILTRAR _debug
     }
 
     # Predicción final (mayor probabilidad)
@@ -1191,20 +1768,7 @@ def predict(req: PredictionRequest):
     # ELO Y CONFIDENCE (tu código existente)
     # ══════════════════════════════════════════════════════════════════════════
 
-    # Extraer Elo diff de X_1x2 (numpy array)
-    # X_1x2 shape: (1, 40)
-    # Posición 2 = elo_diff (después de elo_home y elo_away)
-    elo_diff = float(X_1x2[0, 2])  # ← CORRECTO: acceso a numpy array
-
-    # Threshold por liga (ajustar según necesites)
-    elo_threshold_map = {
-        "8": 100,  # LaLiga
-        "17": 80,  # Premier (más equilibrado)
-        "23": 90  # Serie A
-    }
-    elo_threshold = elo_threshold_map.get(req.league_id, 100)
-
-    confidence = get_match_confidence(elo_diff, elo_threshold)
+    confidence = get_match_confidence(result_proba, elo_diff, req.league_id)
     odds = calculate_odds(result_proba, margin=0.07)
 
 #    # ══════════════════════════════════════════════════════════════════════════
@@ -1252,6 +1816,7 @@ def predict(req: PredictionRequest):
             "probabilities": result_proba,
             "odds": odds,
             "confidence": confidence,
+            "blend_info": result_proba_new.get('_debug', {}),
         },
         # "over_under": over_under,
     }
