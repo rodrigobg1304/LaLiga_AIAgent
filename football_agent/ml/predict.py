@@ -12,7 +12,11 @@ from typing import Optional
 from datetime import datetime
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "../src"))
-from football_agent.db import run_query, TABLE
+from football_agent.db import (run_query, TABLE, get_all_matches_chronological, get_league_matches,
+                               get_team_season_count as db_get_team_season_count,
+                               get_team_recent_matches_goals, get_h2h_matches, get_proxy_h2h_matches,
+                               get_team_stat_average, get_team_multiple_stats_average,
+                               get_team_win_rates, get_team_goals_conceded_average, get_team_matches_total_goals)
 
 try:
 #     # from ml.train import HybridCalibratedModel  # noqa: F401
@@ -21,6 +25,11 @@ except ModuleNotFoundError:
 #     # from train_old import HybridCalibratedModel  # noqa: F401
      from train_old import FEATURES
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+# DEFINICIÓN DE VARIABLES GLOBALES
+# ══════════════════════════════════════════════════════════════════════════════
+MODELS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # MODEL MANAGER PARA 1X2 (RF + ENSEMBLE)
@@ -196,8 +205,105 @@ class ModelManager1X2:
         }
 
 
+class ModelManagerOverUnder:
+    """Gestiona la carga de modelos Over/Under (0.5, 1.5, 2.5, 3.5)"""
+
+    def __init__(self):
+        self.models = {}
+        self.thresholds = [0.5, 1.5, 2.5, 3.5]
+        self.league_models = {}  # {league_id: {threshold: model}}
+
+    def load_models(self, league_id: str = "8"):
+        """Carga los 4 modelos Over/Under para una liga"""
+        if league_id in self.league_models:
+            return  # Ya cargados
+
+        league_name = {
+            "8": "laliga",
+            "17": "premier_league",
+            "23": "serie_a"
+        }.get(league_id, "laliga")
+
+        self.league_models[league_id] = {}
+
+        for threshold in self.thresholds:
+            threshold_str = str(threshold).replace(".", "_")
+            model_path = os.path.join(MODELS_DIR, f"model_over_{threshold_str}_{league_name}.pkl")
+
+            if not os.path.exists(model_path):
+                print(f"⚠️  Modelo Over/Under {threshold} no encontrado para {league_name}")
+                continue
+
+            try:
+                with open(model_path, 'rb') as f:
+                    self.league_models[league_id][threshold] = pickle.load(f)
+                print(f"  ✅ Over {threshold}: {league_name}")
+            except Exception as e:
+                print(f"  ❌ Error cargando Over {threshold}: {e}")
+
+    def get_model(self, league_id: str, threshold: float):
+        """Obtiene un modelo específico"""
+        if league_id not in self.league_models:
+            self.load_models(league_id)
+        return self.league_models.get(league_id, {}).get(threshold)
+
+    def load_all_models(self):
+        """Precarga modelos de todas las ligas disponibles"""
+        print("🔄 Cargando modelos Over/Under...")
+        for league_id in ["8"]:  # Solo LaLiga por ahora
+            print(f"  Liga {league_id}:")
+            self.load_models(league_id)
+        print("✅ Modelos Over/Under cargados")
+
+    def predict_over_under(self, home_team: str, away_team: str, year: str, league_id: str) -> dict:
+        """
+        Predice probabilidades Over/Under para umbrales 0.5, 1.5, 2.5, 3.5
+        con restricción monotónica: P(>0.5) >= P(>1.5) >= P(>2.5) >= P(>3.5)
+        """
+        # Reutilizar features de 1X2
+        features = build_features_1x2(home_team, away_team, year, league_id)
+
+        if features.ndim == 3:
+            features = features.reshape(1, -1)
+        elif features.ndim == 1:
+            features = features.reshape(1, -1)
+
+        # Obtener probabilidades de cada modelo
+        probs_over = []
+
+        for threshold in self.thresholds:
+            model = model_manager_ou.get_model(league_id, threshold)
+
+            if model is None:
+                # Si no hay modelo, usar heurística simple
+                probs_over.append(0.5)
+                continue
+
+            prob = model.predict_proba(features)[0, 1]  # Probabilidad de "Over"
+            probs_over.append(prob)
+
+        # Aplicar restricción monotónica: P(>0.5) >= P(>1.5) >= P(>2.5) >= P(>3.5)
+        probs_over = np.array(probs_over)
+        probs_over_monotonic = np.maximum.accumulate(probs_over[::-1])[::-1]
+
+        # Construir respuesta
+        result = {}
+        for i, threshold in enumerate(self.thresholds):
+            threshold_str = str(threshold).replace(".", "_")
+            prob_over = float(probs_over_monotonic[i])
+            prob_under = 1.0 - prob_over
+
+            result[f"over_{threshold_str}"] = {
+                "over": round(prob_over * 100, 1),
+                "under": round(prob_under * 100, 1)
+            }
+
+        return result
+
+
 # Instancia global
 model_manager_1x2 = ModelManager1X2()
+model_manager_ou = ModelManagerOverUnder()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -283,13 +389,18 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"⚠️  Error cargando modelos 1X2: {e}")
 
+    # ── MODELOS OVER/UNDER ── ← AÑADIR ESTO
+    print("🚀 Precargando modelos Over/Under...")
+    try:
+        model_manager_ou.load_all_models()
+    except Exception as e:
+        print(f"⚠️  Error cargando modelos Over/Under: {e}")
+
     print("✅ Precarga completada. API lista.")
     yield
 
 
 app = FastAPI(title="Football Prediction API", version="1.0", lifespan=lifespan)
-
-MODELS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
 
 OVER_THRESHOLDS = [0.5, 1.5, 2.5, 3.5]
 
@@ -300,14 +411,14 @@ LEAGUE_MODEL_MAP = {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# PARÁMETROS ELO (DEBEN COINCIDIR CON train_old.py)
+# PARÁMETROS ELO (DEBEN COINCIDIR CON train.py)
 # ══════════════════════════════════════════════════════════════════════════════
 ELO_K = 32  # Factor K (velocidad de ajuste)
 ELO_SCALE = 600  # Escala (400=ajedrez, 600=fútbol)
 ELO_HOME_ADVANTAGE = 100  # Ventaja de jugar en casa
 
 # ══════════════════════════════════════════════════════════════════════════════
-# PARÁMETROS DE PONDERACIÓN (DEBEN COINCIDIR CON train_old.py)
+# PARÁMETROS DE PONDERACIÓN (DEBEN COINCIDIR CON train.py)
 # ══════════════════════════════════════════════════════════════════════════════
 RECENT_WEIGHT = 0.65  # Peso de forma reciente (últimos N partidos)
 HISTORICAL_WEIGHT = 0.35  # Peso de histórico completo
@@ -368,32 +479,26 @@ _ELO_TTL_SECONDS = 3600
 
 
 def _build_elo_cache() -> dict:
-    """Recalcula el Elo de todos los equipos desde el histórico completo.
-    USA: k=32, scale=600, home_advantage=100 (igual que train_old.py)"""
-    print(f"🔄 Recalculando caché de Elo global: {datetime.now()}")
-    sql = f"""
-        SELECT homeTeam, awayTeam,
-               SUM(CASE WHEN name='Goals' AND period IN ('1ST','2ND') THEN CAST(homeValue AS DECIMAL) ELSE 0 END) AS hg,
-               SUM(CASE WHEN name='Goals' AND period IN ('1ST','2ND') THEN CAST(awayValue AS DECIMAL) ELSE 0 END) AS ag
-        FROM {TABLE}
-        WHERE name = 'Goals' AND period IN ('1ST', '2ND')
-        GROUP BY matchId, homeTeam, awayTeam
-        ORDER BY Year ASC, CAST(Round AS SIGNED) ASC
     """
+    Recalcula el Elo de todos los equipos desde el histórico completo.
+    Parámetros: k=32, scale=600, home_advantage=100
+    """
+    print(f"🔄 Recalculando caché de Elo global: {datetime.now()}")
 
-    # print(f"[DEBUG] SQL QUERY:\n{sql}\n")
-    rows = run_query(sql, ())
+    # ✅ Solo llamada a db.py, sin SQL mezclado
+    matches = get_all_matches_chronological()
+
     elo: dict = {}
 
-    for row in rows:
-        h, a = row["homeTeam"], row["awayTeam"]
+    for match in matches:
+        h, a = match["homeTeam"], match["awayTeam"]
         elo.setdefault(h, 1500)
         elo.setdefault(a, 1500)
 
         elo_home_adjusted = elo[h] + ELO_HOME_ADVANTAGE
         exp_h = 1 / (1 + 10 ** ((elo[a] - elo_home_adjusted) / ELO_SCALE))
 
-        hg, ag = float(row["hg"] or 0), float(row["ag"] or 0)
+        hg, ag = float(match["home_goals"] or 0), float(match["away_goals"] or 0)
         if hg > ag:
             sh, sa = 1, 0
         elif hg < ag:
@@ -499,6 +604,9 @@ def get_over_rates_cached(home_team: str, away_team: str, year: Optional[str]) -
 
 
 def get_league_standings(league_id: str, year: Optional[str]) -> list:
+    """
+    Calcula la clasificación de una liga/año con caché.
+    """
     if not year:
         return []
 
@@ -508,30 +616,22 @@ def get_league_standings(league_id: str, year: Optional[str]) -> list:
     if cache_key in _standings_cache and cache_age < _STANDINGS_TTL:
         return _standings_cache[cache_key]
 
-    sql = f"""
-        SELECT homeTeam, awayTeam,
-               SUM(CASE WHEN name='Goals' AND period IN ('1ST','2ND') THEN CAST(homeValue AS DECIMAL) ELSE 0 END) AS hg,
-               SUM(CASE WHEN name='Goals' AND period IN ('1ST','2ND') THEN CAST(awayValue AS DECIMAL) ELSE 0 END) AS ag
-        FROM {TABLE}
-        WHERE name = 'Goals'
-          AND LeagueId = %s
-          AND Year = %s
-        GROUP BY MatchId, homeTeam, awayTeam
-    """
-    # print(f"[DEBUG] SQL QUERY:\n{sql}\n")
-    rows = run_query(sql, (league_id, year))
-    if not rows:
+    matches = get_league_matches(league_id, year)
+
+    if not matches:
         _standings_cache[cache_key] = []
         _standings_mtime[cache_key] = time.time()
         return []
 
     table = {}
-    for r in rows:
-        h, a = r["homeTeam"], r["awayTeam"]
-        hg, ag = float(r["hg"] or 0), float(r["ag"] or 0)
+    for match in matches:
+        h, a = match["homeTeam"], match["awayTeam"]
+        hg, ag = float(match["home_goals"] or 0), float(match["away_goals"] or 0)
+
         for team in [h, a]:
             if team not in table:
                 table[team] = {"team": team, "pts": 0, "gf": 0, "ga": 0}
+
         if hg > ag:
             table[h]["pts"] += 3
         elif hg < ag:
@@ -539,6 +639,7 @@ def get_league_standings(league_id: str, year: Optional[str]) -> list:
         else:
             table[h]["pts"] += 1
             table[a]["pts"] += 1
+
         table[h]["gf"] += hg
         table[h]["ga"] += ag
         table[a]["gf"] += ag
@@ -551,7 +652,6 @@ def get_league_standings(league_id: str, year: Optional[str]) -> list:
     _standings_cache[cache_key] = result
     _standings_mtime[cache_key] = time.time()
     return result
-
 
 # ─────────────────────────────────────────────
 # HELPERS
@@ -574,7 +674,6 @@ def get_recent_years(year: str, n: int = 2) -> list:
 # ─────────────────────────────────────────────
 # FEATURES DE EQUIPO CON PONDERACIÓN 65/35
 # ─────────────────────────────────────────────
-
 def get_team_stats_weighted(team: str, role: str, year: Optional[str],
                             stat_name: str, n: int = 5) -> float:
     """
@@ -590,63 +689,13 @@ def get_team_stats_weighted(team: str, role: str, year: Optional[str],
     Returns:
         Valor ponderado de la estadística
     """
-    team_col = "homeTeam" if role == "home" else "awayTeam"
-    stat_col = "homeValue" if role == "home" else "awayValue"
-
     recent_years = get_recent_years(year) if year else []
 
-    # ── HISTÓRICO COMPLETO ──
-    if recent_years:
-        placeholders_years = ",".join(["%s"] * len(recent_years))
-        year_filter_hist = f"AND Year IN ({placeholders_years})"
-        params_hist = [team, stat_name] + recent_years
-    else:
-        year_filter_hist = ""
-        params_hist = [team, stat_name]
+    # ✅ Histórico completo (sin límite de partidos)
+    historical_avg = get_team_stat_average(team, role, stat_name, recent_years, n=None)
 
-    sql_hist = f"""
-        SELECT AVG(CAST({stat_col} AS DECIMAL)) AS stat_value
-        FROM (
-            SELECT matchId,
-                   SUM(CAST({stat_col} AS DECIMAL)) AS {stat_col}
-            FROM {TABLE}
-            WHERE {team_col} = %s
-              AND name = %s
-              AND period IN ('1ST', '2ND')
-              {year_filter_hist}
-            GROUP BY matchId
-        ) AS all_matches
-    """
-    # print(f"[DEBUG] SQL QUERY:\n{sql_hist}\n")
-    rows_hist = run_query(sql_hist, tuple(params_hist))
-    historical_avg = float(rows_hist[0]["stat_value"]) if (
-                rows_hist and rows_hist[0]["stat_value"] is not None) else 0.0
-
-    # ── FORMA RECIENTE (últimos n partidos) ──
-    if recent_years:
-        params_recent = [team, stat_name] + recent_years + [n]
-    else:
-        params_recent = [team, stat_name, n]
-
-    sql_recent = f"""
-        SELECT AVG(CAST({stat_col} AS DECIMAL)) AS stat_value
-        FROM (
-            SELECT matchId,
-                   SUM(CAST({stat_col} AS DECIMAL)) AS {stat_col}
-            FROM {TABLE}
-            WHERE {team_col} = %s
-              AND name = %s
-              AND period IN ('1ST', '2ND')
-              {year_filter_hist}
-            GROUP BY matchId
-            ORDER BY MAX(Year) DESC, MAX(CAST(Round AS SIGNED)) DESC
-            LIMIT %s
-        ) AS recent_matches
-    """
-    # print(f"[DEBUG] SQL QUERY:\n{sql_recent}\n")
-    rows_recent = run_query(sql_recent, tuple(params_recent))
-    recent_avg = float(rows_recent[0]["stat_value"]) if (
-                rows_recent and rows_recent[0]["stat_value"] is not None) else 0.0
+    # ✅ Forma reciente (últimos n partidos)
+    recent_avg = get_team_stat_average(team, role, stat_name, recent_years, n=n)
 
     # ── PONDERACIÓN 65% reciente + 35% histórico ──
     weighted_avg = float(RECENT_WEIGHT) * recent_avg + float(HISTORICAL_WEIGHT) * historical_avg
@@ -654,139 +703,22 @@ def get_team_stats_weighted(team: str, role: str, year: Optional[str],
     return weighted_avg
 
 
-"""
-VERSIÓN OPTIMIZADA DE get_team_features()
-
-ANTES: 18 queries por equipo (9 stats × 2 queries cada una)
-DESPUÉS: 2 queries por equipo (1 histórico + 1 reciente)
-
-REDUCCIÓN: 90% menos queries
-"""
-
-
 def get_team_features(team: str, role: str, year: Optional[str], league_id: str, n: int = 5) -> dict:
     """
     Versión OPTIMIZADA: 2 queries en lugar de 18
     Calcula features de equipo con ponderación 65% reciente + 35% histórico.
     """
-    # print(f"\n{'=' * 60}")
-    # print(f"[DEBUG] get_team_features LLAMADA")
-    # print(f"  team: {team!r}")
-    # print(f"  role: {role!r}")
-    # print(f"  year: {year!r}")
-    # print(f"  league_id: {league_id!r}")
-    # print(f"  n: {n}")
-    # print(f"{'=' * 60}\n")
-
-    team_col = "homeTeam" if role == "home" else "awayTeam"
-    stat_col = "homeValue" if role == "home" else "awayValue"
-
     recent_years = get_recent_years(year) if year else []
 
     if not recent_years:
         # Sin año, retornar features vacías
         return {f"{role}_avg_{feat}": 0.0 for feat in FEATURES}
 
-    placeholders_years = ",".join(["%s"] * len(recent_years))
-    year_filter = f"AND Year IN ({placeholders_years})"
+    # ✅ QUERY 1: HISTÓRICO COMPLETO (todas las stats en una sola query)
+    stats_hist = get_team_multiple_stats_average(team, role, recent_years, n=None)
 
-    # ══════════════════════════════════════════════════════════════════════
-    # QUERY 1: HISTÓRICO COMPLETO (todas las stats en una sola query)
-    # ══════════════════════════════════════════════════════════════════════
-    sql_hist = f"""
-        SELECT 
-            AVG(goals) AS goals,
-            AVG(ball_possession) AS ball_possession,
-            AVG(total_shots) AS total_shots,
-            AVG(shots_on_target) AS shots_on_target,
-            AVG(gk_saves) AS gk_saves,
-            AVG(big_chances) AS big_chances,
-            AVG(accurate_passes) AS accurate_passes,
-            AVG(tackles_won) AS tackles_won,
-            AVG(interceptions) AS interceptions,
-            AVG(blocked_shots) AS blocked_shots
-        FROM (
-            SELECT matchId,
-                   MAX(CASE WHEN name='Goals' AND period IN ('1ST','2ND') 
-                       THEN CAST({stat_col} AS DECIMAL) END) AS goals,
-                   MAX(CASE WHEN name='Ball possession' AND period IN ('1ST','2ND') 
-                       THEN CAST({stat_col} AS DECIMAL) END) AS ball_possession,
-                   MAX(CASE WHEN name='Total shots' AND period IN ('1ST','2ND') 
-                       THEN CAST({stat_col} AS DECIMAL) END) AS total_shots,
-                   MAX(CASE WHEN name='Shots on target' AND period IN ('1ST','2ND') 
-                       THEN CAST({stat_col} AS DECIMAL) END) AS shots_on_target,
-                   MAX(CASE WHEN name='Goalkeeper saves' AND period IN ('1ST','2ND') 
-                       THEN CAST({stat_col} AS DECIMAL) END) AS gk_saves,
-                   MAX(CASE WHEN name='Big chances' AND period IN ('1ST','2ND') 
-                       THEN CAST({stat_col} AS DECIMAL) END) AS big_chances,
-                   MAX(CASE WHEN name='Accurate passes' AND period IN ('1ST','2ND') 
-                       THEN CAST({stat_col} AS DECIMAL) END) AS accurate_passes,
-                   MAX(CASE WHEN name='Tackles won' AND period IN ('1ST','2ND') 
-                       THEN CAST({stat_col} AS DECIMAL) END) AS tackles_won,
-                   MAX(CASE WHEN name='Interceptions' AND period IN ('1ST','2ND') 
-                       THEN CAST({stat_col} AS DECIMAL) END) AS interceptions,
-                   MAX(CASE WHEN name='Blocked shots' AND period IN ('1ST','2ND') 
-                       THEN CAST({stat_col} AS DECIMAL) END) AS blocked_shots
-            FROM {TABLE}
-            WHERE {team_col} = %s
-              AND period IN ('1ST', '2ND')
-              {year_filter}
-            GROUP BY matchId
-        ) AS all_matches
-    """
-    params_hist = [team] + recent_years
-    # print(f"[DEBUG] SQL QUERY:\n{sql_hist}\n")
-    rows_hist = run_query(sql_hist, tuple(params_hist))
-
-    # ══════════════════════════════════════════════════════════════════════
-    # QUERY 2: FORMA RECIENTE (últimos n partidos)
-    # ══════════════════════════════════════════════════════════════════════
-    sql_recent = f"""
-        SELECT 
-            AVG(goals) AS goals,
-            AVG(ball_possession) AS ball_possession,
-            AVG(total_shots) AS total_shots,
-            AVG(shots_on_target) AS shots_on_target,
-            AVG(gk_saves) AS gk_saves,
-            AVG(big_chances) AS big_chances,
-            AVG(accurate_passes) AS accurate_passes,
-            AVG(tackles_won) AS tackles_won,
-            AVG(interceptions) AS interceptions,
-            AVG(blocked_shots) AS blocked_shots
-        FROM (
-            SELECT matchId,
-                   MAX(CASE WHEN name='Goals' AND period IN ('1ST','2ND') 
-                       THEN CAST({stat_col} AS DECIMAL) END) AS goals,
-                   MAX(CASE WHEN name='Ball possession' AND period IN ('1ST','2ND') 
-                       THEN CAST({stat_col} AS DECIMAL) END) AS ball_possession,
-                   MAX(CASE WHEN name='Total shots' AND period IN ('1ST','2ND') 
-                       THEN CAST({stat_col} AS DECIMAL) END) AS total_shots,
-                   MAX(CASE WHEN name='Shots on target' AND period IN ('1ST','2ND') 
-                       THEN CAST({stat_col} AS DECIMAL) END) AS shots_on_target,
-                   MAX(CASE WHEN name='Goalkeeper saves' AND period IN ('1ST','2ND') 
-                       THEN CAST({stat_col} AS DECIMAL) END) AS gk_saves,
-                   MAX(CASE WHEN name='Big chances' AND period IN ('1ST','2ND') 
-                       THEN CAST({stat_col} AS DECIMAL) END) AS big_chances,
-                   MAX(CASE WHEN name='Accurate passes' AND period IN ('1ST','2ND') 
-                       THEN CAST({stat_col} AS DECIMAL) END) AS accurate_passes,
-                   MAX(CASE WHEN name='Tackles won' AND period IN ('1ST','2ND') 
-                       THEN CAST({stat_col} AS DECIMAL) END) AS tackles_won,
-                   MAX(CASE WHEN name='Interceptions' AND period IN ('1ST','2ND') 
-                       THEN CAST({stat_col} AS DECIMAL) END) AS interceptions,
-                   MAX(CASE WHEN name='Blocked shots' AND period IN ('1ST','2ND') 
-                       THEN CAST({stat_col} AS DECIMAL) END) AS blocked_shots
-            FROM {TABLE}
-            WHERE {team_col} = %s
-              AND period IN ('1ST', '2ND')
-              {year_filter}
-            GROUP BY matchId
-            ORDER BY MAX(Year) DESC, MAX(CAST(Round AS SIGNED)) DESC
-            LIMIT %s
-        ) AS recent_matches
-    """
-    params_recent = [team] + recent_years + [n]
-    # print(f"[DEBUG] SQL QUERY:\n{sql_recent}\n")
-    rows_recent = run_query(sql_recent, tuple(params_recent))
+    # ✅ QUERY 2: FORMA RECIENTE (últimos n partidos)
+    stats_recent = get_team_multiple_stats_average(team, role, recent_years, n=n)
 
     # ══════════════════════════════════════════════════════════════════════
     # PONDERACIÓN 65% reciente + 35% histórico
@@ -808,8 +740,8 @@ def get_team_features(team: str, role: str, year: Optional[str], league_id: str,
     }
 
     for sql_col, feat_name in stat_mapping.items():
-        hist_avg = float(rows_hist[0][sql_col] or 0) if rows_hist and rows_hist[0][sql_col] is not None else 0.0
-        recent_avg = float(rows_recent[0][sql_col] or 0) if rows_recent and rows_recent[0][sql_col] is not None else 0.0
+        hist_avg = stats_hist.get(sql_col, 0.0)
+        recent_avg = stats_recent.get(sql_col, 0.0)
 
         weighted_avg = float(RECENT_WEIGHT) * recent_avg + float(HISTORICAL_WEIGHT) * hist_avg
         features[f"{role}_avg_{feat_name}"] = weighted_avg
@@ -823,178 +755,60 @@ def get_team_features(team: str, role: str, year: Optional[str], league_id: str,
     # ══════════════════════════════════════════════════════════════════════
     # AÑADIR FORM FEATURES INLINE (win_rate, form_pts, goals_conceded)
     # ══════════════════════════════════════════════════════════════════════
-    form_features = _get_form_features_inline(team, role, year, league_id, n,
-                                              year_filter, recent_years)
+    form_features = _get_form_features_inline(team=team, role=role, league_id=league_id, n=n,
+                                              recent_years=recent_years)
     features.update(form_features)
 
     return features
 
 
-def _get_form_features_inline(team: str, role: str, year: Optional[str],
-                              league_id: str, n: int, year_filter: str,
-                              recent_years: list) -> dict:
+def _get_form_features_inline(team: str, role: str, league_id: str, n: int, recent_years: list) -> dict:
     """
-    Helper interno para calcular win_rate, form_pts y goals_conceded
-    en la misma función get_team_features (evitar queries duplicadas)
-
-    Añade 4 queries más por equipo:
-    - 2 para win rates (histórico + reciente)
-    - 2 para goals conceded (histórico + reciente)
-
-    Total: 2 + 4 = 6 queries por equipo (vs 18 anterior)
-    """
-    # ← AÑADIR ESTOS PRINTS
-    # print(f"🔍 _get_form_features_inline CALLED:")
-    # print(f"   team={repr(team)}")
-    # print(f"   role={role}")
-    # print(f"   league_id={league_id}")
-    # print(f"   year_filter={repr(year_filter)}")
-    # print(f"   recent_years={recent_years}")
-    # print(f"   n={n}")
-
-    team_col = "homeTeam" if role == "home" else "awayTeam"
-    goals_col = "awayValue" if role == "home" else "homeValue"  # Goles concedidos
-
-    # ── WIN RATES HISTÓRICO ──
-    sql_hist_wr = f"""
-        SELECT 
-            SUM(CASE WHEN home_goals > away_goals THEN 1 ELSE 0 END) AS wins,
-            SUM(CASE WHEN home_goals = away_goals THEN 1 ELSE 0 END) AS draws,
-            SUM(CASE WHEN home_goals < away_goals THEN 1 ELSE 0 END) AS losses,
-            COUNT(*) AS total
-        FROM (
-            SELECT matchId,
-                   SUM(CASE WHEN name='Goals' AND period IN ('1ST','2ND') THEN CAST(homeValue AS DECIMAL) ELSE 0 END) AS home_goals,
-                   SUM(CASE WHEN name='Goals' AND period IN ('1ST','2ND') THEN CAST(awayValue AS DECIMAL) ELSE 0 END) AS away_goals
-            FROM {TABLE}
-            WHERE {team_col} = %s
-              AND name = 'Goals'
-              AND LeagueId = %s
-              {year_filter}
-            GROUP BY matchId
-        ) AS matches
+    Helper interno para calcular win_rate, form_pts y goals_conceded.
+    Ahora solo 4 queries (2 win_rates + 2 goals_conceded).
     """
 
-    # Construir params usando recent_years pasado como parámetro
-    if recent_years:
-        params_hist_wr = [team, league_id] + recent_years
-    else:
-        params_hist_wr = [team, league_id]
+    # ✅ WIN RATES HISTÓRICO
+    stats_hist_wr = get_team_win_rates(team, role, league_id, recent_years, n=None)
 
-    # print(f"[DEBUG] SQL QUERY:\n{sql_hist_wr}\n")
-    rows_hist_wr = run_query(sql_hist_wr, tuple(params_hist_wr))
+    # ✅ WIN RATES RECIENTE
+    stats_recent_wr = get_team_win_rates(team, role, league_id, recent_years, n=n)
 
-    # ── WIN RATES RECIENTE ──
-    sql_recent_wr = f"""
-        SELECT 
-            SUM(CASE WHEN home_goals > away_goals THEN 1 ELSE 0 END) AS wins,
-            SUM(CASE WHEN home_goals = away_goals THEN 1 ELSE 0 END) AS draws,
-            SUM(CASE WHEN home_goals < away_goals THEN 1 ELSE 0 END) AS losses,
-            COUNT(*) AS total
-        FROM (
-            SELECT matchId,
-                   SUM(CASE WHEN name='Goals' AND period IN ('1ST','2ND') THEN CAST(homeValue AS DECIMAL) ELSE 0 END) AS home_goals,
-                   SUM(CASE WHEN name='Goals' AND period IN ('1ST','2ND') THEN CAST(awayValue AS DECIMAL) ELSE 0 END) AS away_goals
-            FROM {TABLE}
-            WHERE {team_col} = %s
-              AND name = 'Goals'
-              AND LeagueId = %s
-              {year_filter}
-            GROUP BY matchId
-            ORDER BY MAX(Year) DESC, MAX(CAST(Round AS SIGNED)) DESC
-            LIMIT %s
-        ) AS recent
-    """
-
-    if recent_years:
-        params_recent_wr = [team, league_id] + recent_years + [n]
-    else:
-        params_recent_wr = [team, league_id, n]
-
-    # print(f"[DEBUG] SQL QUERY:\n{sql_recent_wr}\n")
-    rows_recent_wr = run_query(sql_recent_wr, tuple(params_recent_wr))
-
-    # Calcular win rates
-    if not rows_hist_wr or rows_hist_wr[0]["total"] == 0:
+    # Calcular win rates ponderados
+    if stats_hist_wr["total"] == 0:
         hist_win_rate = hist_draw_rate = hist_loss_rate = 0
     else:
-        total_hist = float(rows_hist_wr[0]["total"])
+        total_hist = float(stats_hist_wr["total"])
         if role == "home":
-            hist_win_rate = float(rows_hist_wr[0]["wins"]) / total_hist
-            hist_draw_rate = float(rows_hist_wr[0]["draws"]) / total_hist
-            hist_loss_rate = float(rows_hist_wr[0]["losses"]) / total_hist
-        else:
-            hist_win_rate = float(rows_hist_wr[0]["losses"]) / total_hist
-            hist_draw_rate = float(rows_hist_wr[0]["draws"]) / total_hist
-            hist_loss_rate = float(rows_hist_wr[0]["wins"]) / total_hist
+            hist_win_rate = float(stats_hist_wr["wins"]) / total_hist
+            hist_draw_rate = float(stats_hist_wr["draws"]) / total_hist
+            hist_loss_rate = float(stats_hist_wr["losses"]) / total_hist
+        else:  # away: invertir wins/losses
+            hist_win_rate = float(stats_hist_wr["losses"]) / total_hist
+            hist_draw_rate = float(stats_hist_wr["draws"]) / total_hist
+            hist_loss_rate = float(stats_hist_wr["wins"]) / total_hist
 
-    if not rows_recent_wr or rows_recent_wr[0]["total"] == 0:
+    if stats_recent_wr["total"] == 0:
         recent_win_rate = recent_draw_rate = recent_loss_rate = 0
         form_pts = 0
     else:
-        total_recent = float(rows_recent_wr[0]["total"])
+        total_recent = float(stats_recent_wr["total"])
         if role == "home":
-            recent_win_rate = float(rows_recent_wr[0]["wins"]) / total_recent
-            recent_draw_rate = float(rows_recent_wr[0]["draws"]) / total_recent
-            recent_loss_rate = float(rows_recent_wr[0]["losses"]) / total_recent
-            form_pts = int(rows_recent_wr[0]["wins"]) * 3 + int(rows_recent_wr[0]["draws"])
-        else:
-            recent_win_rate = float(rows_recent_wr[0]["losses"]) / total_recent
-            recent_draw_rate = float(rows_recent_wr[0]["draws"]) / total_recent
-            recent_loss_rate = float(rows_recent_wr[0]["wins"]) / total_recent
-            form_pts = int(rows_recent_wr[0]["losses"]) * 3 + int(rows_recent_wr[0]["draws"])
+            recent_win_rate = float(stats_recent_wr["wins"]) / total_recent
+            recent_draw_rate = float(stats_recent_wr["draws"]) / total_recent
+            recent_loss_rate = float(stats_recent_wr["losses"]) / total_recent
+            form_pts = stats_recent_wr["wins"] * 3 + stats_recent_wr["draws"]
+        else:  # away: invertir wins/losses
+            recent_win_rate = float(stats_recent_wr["losses"]) / total_recent
+            recent_draw_rate = float(stats_recent_wr["draws"]) / total_recent
+            recent_loss_rate = float(stats_recent_wr["wins"]) / total_recent
+            form_pts = stats_recent_wr["losses"] * 3 + stats_recent_wr["draws"]
 
-    # ── GOLES CONCEDIDOS HISTÓRICO ──
-    sql_conceded_hist = f"""
-        SELECT AVG(CAST({goals_col} AS DECIMAL)) AS avg_conceded
-        FROM (
-            SELECT matchId,
-                   SUM(CAST({goals_col} AS DECIMAL)) AS {goals_col}
-            FROM {TABLE}
-            WHERE {team_col} = %s
-              AND name = 'Goals'
-              AND period IN ('1ST', '2ND')
-              {year_filter}
-            GROUP BY matchId
-        ) AS all_matches
-    """
+    # ✅ GOLES CONCEDIDOS HISTÓRICO
+    hist_conceded = get_team_goals_conceded_average(team, role, recent_years, n=None)
 
-    if recent_years:
-        params_conceded_hist = [team] + recent_years
-    else:
-        params_conceded_hist = [team]
-
-    # print(f"[DEBUG] SQL QUERY:\n{sql_conceded_hist}\n")
-    rows_conceded_hist = run_query(sql_conceded_hist, tuple(params_conceded_hist))
-    hist_conceded = float(rows_conceded_hist[0]["avg_conceded"]) if (
-            rows_conceded_hist and rows_conceded_hist[0]["avg_conceded"] is not None) else 0.0
-
-    # ── GOLES CONCEDIDOS RECIENTE ──
-    sql_conceded_recent = f"""
-        SELECT AVG(CAST({goals_col} AS DECIMAL)) AS avg_conceded
-        FROM (
-            SELECT matchId,
-                   SUM(CAST({goals_col} AS DECIMAL)) AS {goals_col}
-            FROM {TABLE}
-            WHERE {team_col} = %s
-              AND name = 'Goals'
-              AND period IN ('1ST', '2ND')
-              {year_filter}
-            GROUP BY matchId
-            ORDER BY MAX(Year) DESC, MAX(CAST(Round AS SIGNED)) DESC
-            LIMIT %s
-        ) AS recent_matches
-    """
-
-    if recent_years:
-        params_conceded_recent = [team] + recent_years + [n]
-    else:
-        params_conceded_recent = [team, n]
-
-    # print(f"[DEBUG] SQL QUERY:\n{sql_conceded_recent}\n")
-    rows_conceded_recent = run_query(sql_conceded_recent, tuple(params_conceded_recent))
-    recent_conceded = float(rows_conceded_recent[0]["avg_conceded"]) if (
-            rows_conceded_recent and rows_conceded_recent[0]["avg_conceded"] is not None) else 0.0
+    # ✅ GOLES CONCEDIDOS RECIENTE
+    recent_conceded = get_team_goals_conceded_average(team, role, recent_years, n=n)
 
     # Retornar features consolidadas
     return {
@@ -1012,17 +826,7 @@ def get_team_season_count(team: str, year: Optional[str]) -> int:
     recent_years = get_recent_years(year) if year else []
     if not recent_years:
         return 0
-    placeholders_years = ",".join(["%s"] * len(recent_years))
-    sql = f"""
-        SELECT COUNT(DISTINCT Year) AS season_count
-        FROM {TABLE}
-        WHERE (homeTeam = %s OR awayTeam = %s)
-          AND Year IN ({placeholders_years})
-    """
-
-    # print(f"[DEBUG] SQL QUERY:\n{sql}\n")
-    rows = run_query(sql, tuple([team, team] + recent_years))
-    return int(rows[0]["season_count"]) if rows else 0
+    return db_get_team_season_count(team=team, years=recent_years)
 
 
 def get_neighbors(team: str, year: Optional[str], standings: list, n_neighbors: int = 3) -> list:
@@ -1095,102 +899,46 @@ def get_features_from_neighbors(team: str, role: str, year: Optional[str],
 # ─────────────────────────────────────────────
 # FORM FEATURES CON PONDERACIÓN
 # ─────────────────────────────────────────────
-
 def get_win_rates_weighted(team: str, role: str, year: Optional[str],
                            league_id: str, n: int = 5) -> dict:
     """
     Calcula win rates con ponderación INVERTIDA: 35% reciente + 65% histórico.
-    Igual que train_old.py líneas 291-313.
+    Usa la misma función de db.py que _get_form_features_inline.
     """
-    team_col = "homeTeam" if role == "home" else "awayTeam"
-    result_win = "1" if role == "home" else "2"
-
     recent_years = get_recent_years(year) if year else []
 
-    # ── HISTÓRICO COMPLETO ──
-    if recent_years:
-        placeholders_years = ",".join(["%s"] * len(recent_years))
-        year_filter = f"AND Year IN ({placeholders_years})"
-        params_hist = [team, league_id] + recent_years
-    else:
-        year_filter = ""
-        params_hist = [team, league_id]
+    # ✅ WIN RATES HISTÓRICO (reutilizamos función ya creada en db.py)
+    stats_hist = get_team_win_rates(team, role, league_id, recent_years, n=None)
 
-    sql_hist = f"""
-        SELECT 
-            SUM(CASE WHEN home_goals > away_goals THEN 1 ELSE 0 END) AS wins,
-            SUM(CASE WHEN home_goals = away_goals THEN 1 ELSE 0 END) AS draws,
-            SUM(CASE WHEN home_goals < away_goals THEN 1 ELSE 0 END) AS losses,
-            COUNT(*) AS total
-        FROM (
-            SELECT matchId,
-                   SUM(CASE WHEN name='Goals' AND period IN ('1ST','2ND') THEN CAST(homeValue AS DECIMAL) ELSE 0 END) AS home_goals,
-                   SUM(CASE WHEN name='Goals' AND period IN ('1ST','2ND') THEN CAST(awayValue AS DECIMAL) ELSE 0 END) AS away_goals
-            FROM {TABLE}
-            WHERE {team_col} = %s
-              AND name = 'Goals'
-              AND LeagueId = %s
-              {year_filter}
-            GROUP BY matchId
-        ) AS matches
-    """
-    # print(f"[DEBUG] SQL QUERY:\n{sql_hist}\n")
-    rows_hist = run_query(sql_hist, tuple(params_hist))
+    # ✅ WIN RATES RECIENTE
+    stats_recent = get_team_win_rates(team, role, league_id, recent_years, n=n)
 
-    if not rows_hist or rows_hist[0]["total"] == 0:
+    # Calcular win rates desde perspectiva del equipo
+    if stats_hist["total"] == 0:
         hist_win_rate = hist_draw_rate = hist_loss_rate = 0
     else:
-        total_hist = float(rows_hist[0]["total"])
+        total_hist = float(stats_hist["total"])
         if role == "home":
-            hist_win_rate = float(rows_hist[0]["wins"]) / total_hist
-            hist_draw_rate = float(rows_hist[0]["draws"]) / total_hist
-            hist_loss_rate = float(rows_hist[0]["losses"]) / total_hist
-        else:  # away
-            hist_win_rate = float(rows_hist[0]["losses"]) / total_hist  # away gana cuando home pierde
-            hist_draw_rate = float(rows_hist[0]["draws"]) / total_hist
-            hist_loss_rate = float(rows_hist[0]["wins"]) / total_hist
+            hist_win_rate = float(stats_hist["wins"]) / total_hist
+            hist_draw_rate = float(stats_hist["draws"]) / total_hist
+            hist_loss_rate = float(stats_hist["losses"]) / total_hist
+        else:  # away: invertir wins/losses
+            hist_win_rate = float(stats_hist["losses"]) / total_hist
+            hist_draw_rate = float(stats_hist["draws"]) / total_hist
+            hist_loss_rate = float(stats_hist["wins"]) / total_hist
 
-    # ── FORMA RECIENTE ──
-    if recent_years:
-        params_recent = [team, league_id] + recent_years + [n]
-    else:
-        params_recent = [team, league_id, n]
-
-    sql_recent = f"""
-        SELECT 
-            SUM(CASE WHEN home_goals > away_goals THEN 1 ELSE 0 END) AS wins,
-            SUM(CASE WHEN home_goals = away_goals THEN 1 ELSE 0 END) AS draws,
-            SUM(CASE WHEN home_goals < away_goals THEN 1 ELSE 0 END) AS losses,
-            COUNT(*) AS total
-        FROM (
-            SELECT matchId,
-                   SUM(CASE WHEN name='Goals' AND period IN ('1ST','2ND') THEN CAST(homeValue AS DECIMAL) ELSE 0 END) AS home_goals,
-                   SUM(CASE WHEN name='Goals' AND period IN ('1ST','2ND') THEN CAST(awayValue AS DECIMAL) ELSE 0 END) AS away_goals
-            FROM {TABLE}
-            WHERE {team_col} = %s
-              AND name = 'Goals'
-              AND LeagueId = %s
-              {year_filter}
-            GROUP BY matchId
-            ORDER BY MAX(Year) DESC, MAX(CAST(Round AS SIGNED)) DESC
-            LIMIT %s
-        ) AS recent
-    """
-    # print(f"[DEBUG] SQL QUERY:\n{sql_recent}\n")
-    rows_recent = run_query(sql_recent, tuple(params_recent))
-
-    if not rows_recent or rows_recent[0]["total"] == 0:
+    if stats_recent["total"] == 0:
         recent_win_rate = recent_draw_rate = recent_loss_rate = 0
     else:
-        total_recent = float(rows_recent[0]["total"])
+        total_recent = float(stats_recent["total"])
         if role == "home":
-            recent_win_rate = float(rows_recent[0]["wins"]) / total_recent
-            recent_draw_rate = float(rows_recent[0]["draws"]) / total_recent
-            recent_loss_rate = float(rows_recent[0]["losses"]) / total_recent
-        else:
-            recent_win_rate = float(rows_recent[0]["losses"]) / total_recent
-            recent_draw_rate = float(rows_recent[0]["draws"]) / total_recent
-            recent_loss_rate = float(rows_recent[0]["wins"]) / total_recent
+            recent_win_rate = float(stats_recent["wins"]) / total_recent
+            recent_draw_rate = float(stats_recent["draws"]) / total_recent
+            recent_loss_rate = float(stats_recent["losses"]) / total_recent
+        else:  # away: invertir wins/losses
+            recent_win_rate = float(stats_recent["losses"]) / total_recent
+            recent_draw_rate = float(stats_recent["draws"]) / total_recent
+            recent_loss_rate = float(stats_recent["wins"]) / total_recent
 
     # ── PONDERACIÓN INVERTIDA: 35% reciente + 65% histórico ──
     return {
@@ -1202,145 +950,51 @@ def get_win_rates_weighted(team: str, role: str, year: Optional[str],
 
 def get_form_points(team: str, role: str, year: Optional[str],
                     league_id: str, n: int = 5) -> int:
-    """Calcula puntos de forma de últimos N partidos."""
-    team_col = "homeTeam" if role == "home" else "awayTeam"
-
-    recent_years = get_recent_years(year) if year else []
-    if recent_years:
-        placeholders_years = ",".join(["%s"] * len(recent_years))
-        year_filter = f"AND Year IN ({placeholders_years})"
-        params = [team, league_id] + recent_years + [n]
-    else:
-        year_filter = ""
-        params = [team, league_id, n]
-
-    sql = f"""
-        SELECT 
-            SUM(CASE 
-                WHEN home_goals > away_goals THEN 3
-                WHEN home_goals = away_goals THEN 1
-                ELSE 0
-            END) AS points
-        FROM (
-            SELECT matchId,
-                   SUM(CASE WHEN name='Goals' AND period IN ('1ST','2ND') THEN CAST(homeValue AS DECIMAL) ELSE 0 END) AS home_goals,
-                   SUM(CASE WHEN name='Goals' AND period IN ('1ST','2ND') THEN CAST(awayValue AS DECIMAL) ELSE 0 END) AS away_goals
-            FROM {TABLE}
-            WHERE {team_col} = %s
-              AND name = 'Goals'
-              AND LeagueId = %s
-              {year_filter}
-            GROUP BY matchId
-            ORDER BY MAX(Year) DESC, MAX(CAST(Round AS SIGNED)) DESC
-            LIMIT %s
-        ) AS recent
     """
-    # print(f"[DEBUG] SQL QUERY:\n{sql}\n")
-    rows = run_query(sql, tuple(params))
+    Calcula puntos de forma de últimos N partidos.
+    """
+    recent_years = get_recent_years(year) if year else []
 
-    if not rows:
+    # ✅ Solo llamada a db.py
+    matches = get_team_recent_matches_goals(team, league_id, recent_years, role, n)
+
+    if not matches:
         return 0
 
-    points = int(rows[0]["points"] or 0)
+    # Calcular puntos según role
+    points = 0
+    for match in matches:
+        hg = float(match["home_goals"] or 0)
+        ag = float(match["away_goals"] or 0)
 
-    # Para away, necesitamos invertir la lógica
-    if role == "away":
-        sql_away = f"""
-            SELECT 
-                SUM(CASE 
-                    WHEN away_goals > home_goals THEN 3
-                    WHEN away_goals = home_goals THEN 1
-                    ELSE 0
-                END) AS points
-            FROM (
-                SELECT matchId,
-                       SUM(CASE WHEN name='Goals' AND period IN ('1ST','2ND') THEN CAST(homeValue AS DECIMAL) ELSE 0 END) AS home_goals,
-                       SUM(CASE WHEN name='Goals' AND period IN ('1ST','2ND') THEN CAST(awayValue AS DECIMAL) ELSE 0 END) AS away_goals
-                FROM {TABLE}
-                WHERE awayTeam = %s
-                  AND name = 'Goals'
-                  AND LeagueId = %s
-                  {year_filter}
-                GROUP BY matchId
-                ORDER BY MAX(Year) DESC, MAX(CAST(Round AS SIGNED)) DESC
-                LIMIT %s
-            ) AS recent
-        """
-        # print(f"[DEBUG] SQL QUERY:\n{sql_away}\n")
-        rows_away = run_query(sql_away, tuple(params))
-        points = int(rows_away[0]["points"] or 0) if rows_away else 0
+        if role == "home":
+            if hg > ag:
+                points += 3
+            elif hg == ag:
+                points += 1
+        else:  # away
+            if ag > hg:
+                points += 3
+            elif ag == hg:
+                points += 1
 
     return points
 
 
 def get_goals_conceded_weighted(team: str, role: str, year: Optional[str], n: int = 5) -> float:
-    """Calcula goles concedidos ponderados."""
-    # Para home: concede los away_goals cuando juega como local
-    # Para away: concede los home_goals cuando juega como visitante
-
-    if role == "home":
-        team_col = "homeTeam"
-        goals_col = "awayValue"  # Concede goles del visitante
-    else:
-        team_col = "awayTeam"
-        goals_col = "homeValue"  # Concede goles del local
-
+    """
+    Calcula goles concedidos ponderados: 65% reciente + 35% histórico.
+    Reutiliza get_team_goals_conceded_average de db.py (ya creada en función #8).
+    """
     recent_years = get_recent_years(year) if year else []
 
-    # Histórico
-    if recent_years:
-        placeholders_years = ",".join(["%s"] * len(recent_years))
-        year_filter = f"AND Year IN ({placeholders_years})"
-        params_hist = [team] + recent_years
-    else:
-        year_filter = ""
-        params_hist = [team]
+    # ✅ Histórico completo (reutilizamos función de db.py)
+    hist_avg = get_team_goals_conceded_average(team, role, recent_years, n=None)
 
-    sql_hist = f"""
-        SELECT AVG(CAST({goals_col} AS DECIMAL)) AS avg_conceded
-        FROM (
-            SELECT matchId,
-                   SUM(CAST({goals_col} AS DECIMAL)) AS {goals_col}
-            FROM {TABLE}
-            WHERE {team_col} = %s
-              AND name = 'Goals'
-              AND period IN ('1ST', '2ND')
-              {year_filter}
-            GROUP BY matchId
-        ) AS all_matches
-    """
+    # ✅ Forma reciente
+    recent_avg = get_team_goals_conceded_average(team, role, recent_years, n=n)
 
-    # print(f"[DEBUG] SQL QUERY:\n{sql_hist}\n")
-    rows_hist = run_query(sql_hist, tuple(params_hist))
-    hist_avg = float(rows_hist[0]["avg_conceded"]) if (rows_hist and rows_hist[0]["avg_conceded"] is not None) else 0.0
-
-    # Reciente
-    if recent_years:
-        params_recent = [team] + recent_years + [n]
-    else:
-        params_recent = [team, n]
-
-    sql_recent = f"""
-        SELECT AVG(CAST({goals_col} AS DECIMAL)) AS avg_conceded
-        FROM (
-            SELECT matchId,
-                   SUM(CAST({goals_col} AS DECIMAL)) AS {goals_col}
-            FROM {TABLE}
-            WHERE {team_col} = %s
-              AND name = 'Goals'
-              AND period IN ('1ST', '2ND')
-              {year_filter}
-            GROUP BY matchId
-            ORDER BY MAX(Year) DESC, MAX(CAST(Round AS SIGNED)) DESC
-            LIMIT %s
-        ) AS recent_matches
-    """
-
-    # print(f"[DEBUG] SQL QUERY:\n{sql_recent}\n")
-    rows_recent = run_query(sql_recent, tuple(params_recent))
-    recent_avg = float(rows_recent[0]["avg_conceded"]) if (
-                rows_recent and rows_recent[0]["avg_conceded"] is not None) else 0.0
-
+    # Ponderación 65% reciente + 35% histórico
     return float(RECENT_WEIGHT) * recent_avg + float(HISTORICAL_WEIGHT) * hist_avg
 
 
@@ -1371,63 +1025,39 @@ def get_form_features(home_team: str, away_team: str, league_id: str, year: Opti
 # ─────────────────────────────────────────────
 # H2H Y OVER RATES CON PONDERACIÓN
 # ─────────────────────────────────────────────
-
 def get_h2h_features(home_team: str, away_team: str, league_id: str,
                      year: Optional[str], n: int = 5) -> dict:
-    """H2H con proxy de vecinos si < 2 enfrentamientos directos."""
-    sql = f"""
-        SELECT matchId, homeTeam, awayTeam,
-               SUM(CASE WHEN name='Goals' AND period IN ('1ST','2ND') THEN CAST(homeValue AS DECIMAL) ELSE 0 END) AS home_goals,
-               SUM(CASE WHEN name='Goals' AND period IN ('1ST','2ND') THEN CAST(awayValue AS DECIMAL) ELSE 0 END) AS away_goals
-        FROM {TABLE}
-        WHERE name = 'Goals'
-          AND ((homeTeam = %s AND awayTeam = %s) OR (homeTeam = %s AND awayTeam = %s))
-        GROUP BY matchId, homeTeam, awayTeam
-        ORDER BY MAX(Year) DESC, MAX(CAST(Round AS SIGNED)) DESC
-        LIMIT %s
     """
-
-    # print(f"[DEBUG] SQL QUERY:\n{sql}\n")
-    rows = run_query(sql, (home_team, away_team, away_team, home_team, n))
+    Calcula features H2H con proxy de vecinos si < 2 enfrentamientos directos.
+    """
+    matches = get_h2h_matches(home_team, away_team, n)
 
     # Proxy con vecinos si < 2 enfrentamientos
-    if len(rows) < 2:
+    if len(matches) < 2:
         standings = get_league_standings(league_id, year) if year else []
         if standings:
             home_neighbors = get_neighbors(home_team, year, standings, n_neighbors=3)
             away_neighbors = get_neighbors(away_team, year, standings, n_neighbors=3)
 
             if home_neighbors and away_neighbors:
-                neighbors_placeholders = ",".join(["%s"] * len(home_neighbors))
-                neighbors_placeholders2 = ",".join(["%s"] * len(away_neighbors))
+                matches = get_proxy_h2h_matches(home_neighbors, away_neighbors, n)
+                # if matches:
+                #     print(f"⚠️  H2H {home_team} vs {away_team}: usando proxy de vecinos")
 
-                sql_proxy = f"""
-                    SELECT matchId, homeTeam, awayTeam,
-                           SUM(CASE WHEN name='Goals' AND period IN ('1ST','2ND') THEN CAST(homeValue AS DECIMAL) ELSE 0 END) AS home_goals,
-                           SUM(CASE WHEN name='Goals' AND period IN ('1ST','2ND') THEN CAST(awayValue AS DECIMAL) ELSE 0 END) AS away_goals
-                    FROM {TABLE}
-                    WHERE name = 'Goals'
-                      AND homeTeam IN ({neighbors_placeholders})
-                      AND awayTeam IN ({neighbors_placeholders2})
-                    GROUP BY matchId, homeTeam, awayTeam
-                    ORDER BY MAX(Year) DESC, MAX(CAST(Round AS SIGNED)) DESC
-                    LIMIT %s
-                """
+    # Si no hay datos, devolver distribución neutra
+    if not matches:
+        return {
+            "h2h_home_wins": 0.33,
+            "h2h_draws": 0.33,
+            "h2h_away_wins": 0.33,
+            "h2h_avg_goals": 0
+        }
 
-                # print(f"[DEBUG] SQL QUERY:\n{sql_proxy}\n")
-                rows = run_query(sql_proxy, tuple(home_neighbors + away_neighbors + [n]))
+    # Calcular estadísticas H2H
+    total = len(matches)
+    avg_goals = sum(float(m["home_goals"] or 0) + float(m["away_goals"] or 0) for m in matches) / total
 
-                if rows:
-                    pass
-                    # TODO
-                    # print(f"⚠️  H2H {home_team} vs {away_team}: usando proxy de vecinos")
-
-    if not rows:
-        return {"h2h_home_wins": 0.33, "h2h_draws": 0.33, "h2h_away_wins": 0.33, "h2h_avg_goals": 0}
-
-    total = len(rows)
-    avg_goals = sum(float(r["home_goals"] or 0) + float(r["away_goals"] or 0) for r in rows) / total
-
+    # Si muy pocos datos, devolver distribución neutra pero con avg_goals real
     if total < 3:
         return {
             "h2h_home_wins": 0.33,
@@ -1436,16 +1066,17 @@ def get_h2h_features(home_team: str, away_team: str, league_id: str,
             "h2h_avg_goals": round(avg_goals, 2),
         }
 
+    # Contar victorias/empates desde perspectiva del home_team
     home_wins = sum(
-        1 for r in rows if
-        (r["homeTeam"] == home_team and float(r["home_goals"] or 0) > float(r["away_goals"] or 0)) or
-        (r["awayTeam"] == home_team and float(r["away_goals"] or 0) > float(r["home_goals"] or 0))
+        1 for m in matches if
+        (m["homeTeam"] == home_team and float(m["home_goals"] or 0) > float(m["away_goals"] or 0)) or
+        (m["awayTeam"] == home_team and float(m["away_goals"] or 0) > float(m["home_goals"] or 0))
     )
-    draws = sum(1 for r in rows if float(r["home_goals"] or 0) == float(r["away_goals"] or 0))
+    draws = sum(1 for m in matches if float(m["home_goals"] or 0) == float(m["away_goals"] or 0))
     away_wins = sum(
-        1 for r in rows if
-        (r["homeTeam"] == away_team and float(r["home_goals"] or 0) > float(r["away_goals"] or 0)) or
-        (r["awayTeam"] == away_team and float(r["away_goals"] or 0) > float(r["home_goals"] or 0))
+        1 for m in matches if
+        (m["homeTeam"] == away_team and float(m["home_goals"] or 0) > float(m["away_goals"] or 0)) or
+        (m["awayTeam"] == away_team and float(m["away_goals"] or 0) > float(m["home_goals"] or 0))
     )
 
     return {
@@ -1459,66 +1090,29 @@ def get_h2h_features(home_team: str, away_team: str, league_id: str,
 def get_over_rates_weighted(team: str, year: Optional[str], n: int = 5) -> dict:
     """
     Calcula over rates con ponderación 65% reciente + 35% histórico.
-    Igual que train_old.py líneas 183-200.
+    Evalúa thresholds: 0.5, 1.5, 2.5, 3.5 goles totales.
     """
     recent_years = get_recent_years(year) if year else []
 
-    # ── HISTÓRICO COMPLETO ──
-    if recent_years:
-        placeholders_years = ",".join(["%s"] * len(recent_years))
-        year_filter = f"AND Year IN ({placeholders_years})"
-        params_hist = [team, team] + recent_years
-    else:
-        year_filter = ""
-        params_hist = [team, team]
+    # ✅ HISTÓRICO COMPLETO
+    matches_hist = get_team_matches_total_goals(team, recent_years, n=None)
 
-    sql_hist = f"""
-        SELECT 
-            SUM(CASE WHEN name='Goals' AND period IN ('1ST','2ND') THEN CAST(homeValue AS DECIMAL) ELSE 0 END) +
-            SUM(CASE WHEN name='Goals' AND period IN ('1ST','2ND') THEN CAST(awayValue AS DECIMAL) ELSE 0 END) AS total_goals
-        FROM {TABLE}
-        WHERE name = 'Goals'
-          AND (homeTeam = %s OR awayTeam = %s)
-          {year_filter}
-        GROUP BY matchId
-    """
-
-    # print(f"[DEBUG] SQL QUERY:\n{sql_hist}\n")
-    rows_hist = run_query(sql_hist, tuple(params_hist))
-
-    # ── FORMA RECIENTE ──
-    if recent_years:
-        params_recent = [team, team] + recent_years + [n]
-    else:
-        params_recent = [team, team, n]
-
-    sql_recent = f"""
-        SELECT 
-            SUM(CASE WHEN name='Goals' AND period IN ('1ST','2ND') THEN CAST(homeValue AS DECIMAL) ELSE 0 END) +
-            SUM(CASE WHEN name='Goals' AND period IN ('1ST','2ND') THEN CAST(awayValue AS DECIMAL) ELSE 0 END) AS total_goals
-        FROM {TABLE}
-        WHERE name = 'Goals'
-          AND (homeTeam = %s OR awayTeam = %s)
-          {year_filter}
-        GROUP BY matchId
-        ORDER BY MAX(Year) DESC, MAX(CAST(Round AS SIGNED)) DESC
-        LIMIT %s
-    """
-
-    # print(f"[DEBUG] SQL QUERY:\n{sql_recent}\n")
-    rows_recent = run_query(sql_recent, tuple(params_recent))
+    # ✅ FORMA RECIENTE (últimos n partidos)
+    matches_recent = get_team_matches_total_goals(team, recent_years, n=n)
 
     features = {}
-    for t in [0.5, 1.5, 2.5, 3.5]:
-        col = f"over_{str(t).replace('.', '_')}_rate"
+
+    # Calcular over rates para cada threshold
+    for threshold in [0.5, 1.5, 2.5, 3.5]:
+        col = f"over_{str(threshold).replace('.', '_')}_rate"
 
         # Histórico
-        hist_over_count = sum(1 for r in rows_hist if float(r["total_goals"] or 0) > t)
-        hist_over_rate = float(hist_over_count) / float(len(rows_hist)) if rows_hist else 0.0
+        hist_over_count = sum(1 for m in matches_hist if float(m["total_goals"] or 0) > threshold)
+        hist_over_rate = float(hist_over_count) / float(len(matches_hist)) if matches_hist else 0.0
 
         # Reciente
-        recent_over_count = sum(1 for r in rows_recent if float(r["total_goals"] or 0) > t)
-        recent_over_rate = float(recent_over_count) / float(len(rows_recent)) if rows_recent else 0.0
+        recent_over_count = sum(1 for m in matches_recent if float(m["total_goals"] or 0) > threshold)
+        recent_over_rate = float(recent_over_count) / float(len(matches_recent)) if matches_recent else 0.0
 
         # Ponderación 65% reciente + 35% histórico
         features[col] = float(RECENT_WEIGHT) * recent_over_rate + float(HISTORICAL_WEIGHT) * hist_over_rate
@@ -1753,7 +1347,7 @@ def predict(req: PredictionRequest):
     elo_diff = float(X_1x2[0, 2])  # Posición 2 = elo_diff en feature_order
 
     # Llamar con blend dinámico
-    result_proba_new = model_manager_1x2.predict_1x2(req.league_id, X_1x2, elo_diff)
+    result_proba_new = model_manager_1x2.predict_1x2(league_id=req.league_id, features_40=X_1x2, elo_diff=elo_diff)
 
     # Convertir a porcentajes
     result_proba = {
@@ -1799,6 +1393,10 @@ def predict(req: PredictionRequest):
 #            "odds_under": round((1 / (under_pct / 100)) * (1 + 0.07), 2) if under_pct > 0 else 999,
 #        }
 
+    # Predicción Over/Under
+    result_proba_ou = model_manager_ou.predict_over_under(home_team=req.home_team, away_team=req.away_team,
+                                                          year=req.year, league_id=req.league_id)
+
     # ══════════════════════════════════════════════════════════════════════════
     # RESPONSE (añadir info de modelo usado)
     # ══════════════════════════════════════════════════════════════════════════
@@ -1818,6 +1416,7 @@ def predict(req: PredictionRequest):
             "confidence": confidence,
             "blend_info": result_proba_new.get('_debug', {}),
         },
+        "over_under_goals": result_proba_ou
         # "over_under": over_under,
     }
 

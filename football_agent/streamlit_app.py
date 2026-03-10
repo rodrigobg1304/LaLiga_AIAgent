@@ -485,6 +485,129 @@ if section == "Predicción":
         st.markdown("---")
 
         # ═══════════════════════════════════════════════════════════
+        # OVER/UNDER GOLES Y PARADAS
+        # ═══════════════════════════════════════════════════════════
+
+        if 'over_under_goals' in data:
+            st.markdown("---")
+
+            # Dividir en 2 columnas: Over/Under (izq) y Paradas (der)
+            col_ou, col_saves = st.columns(2)
+
+            with col_ou:
+                st.markdown('<div class="section-title">⚽ Over/Under Goles</div>', unsafe_allow_html=True)
+
+                ou = data['over_under_goals']
+
+                # Fila 1: 0.5 y 1.5
+                row1_col1, row1_col2 = st.columns(2)
+
+                with row1_col1:
+                    over_pct = ou["over_0_5"]["over"]
+                    under_pct = ou["over_0_5"]["under"]
+                    over_winner = over_pct > under_pct
+
+                    st.markdown(f"""
+                    <div style='background: #ffffff; border: 2px solid #e5e7eb; border-radius: 12px; padding: 12px;'>
+                        <div style='font-size: 11px; font-weight: 600; color: #888; margin-bottom: 8px; text-align: center; text-transform: uppercase; letter-spacing: 0.05em;'>
+                            GOLES + 0.5
+                        </div>
+                        <div style='display: flex; gap: 6px;'>
+                            <div style='flex: 1; background: {"#f0fdf4" if over_winner else "#ffffff"}; border: 2px solid {"#22c55e" if over_winner else "#e5e7eb"}; border-radius: 6px; padding: 8px; text-align: center;'>
+                                <div style='font-size: 9px; color: #888;'>OVER</div>
+                                <div style='font-size: 18px; font-weight: 700; color: {"#16a34a" if over_winner else "#6b7280"};'>{over_pct:.1f}%</div>
+                            </div>
+                            <div style='flex: 1; background: {"#fef2f2" if not over_winner else "#ffffff"}; border: 2px solid {"#ef4444" if not over_winner else "#e5e7eb"}; border-radius: 6px; padding: 8px; text-align: center;'>
+                                <div style='font-size: 9px; color: #888;'>UNDER</div>
+                                <div style='font-size: 18px; font-weight: 700; color: {"#dc2626" if not over_winner else "#6b7280"};'>{under_pct:.1f}%</div>
+                            </div>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                with row1_col2:
+                    over_pct = ou["over_1_5"]["over"]
+                    under_pct = ou["over_1_5"]["under"]
+                    over_winner = over_pct > under_pct
+
+                    st.markdown(f"""
+                    <div style='background: #ffffff; border: 2px solid #e5e7eb; border-radius: 12px; padding: 12px;'>
+                        <div style='font-size: 11px; font-weight: 600; color: #888; margin-bottom: 8px; text-align: center; text-transform: uppercase; letter-spacing: 0.05em;'>
+                            GOLES + 1.5
+                        </div>
+                        <div style='display: flex; gap: 6px;'>
+                            <div style='flex: 1; background: {"#f0fdf4" if over_winner else "#ffffff"}; border: 2px solid {"#22c55e" if over_winner else "#e5e7eb"}; border-radius: 6px; padding: 8px; text-align: center;'>
+                                <div style='font-size: 9px; color: #888;'>OVER</div>
+                                <div style='font-size: 18px; font-weight: 700; color: {"#16a34a" if over_winner else "#6b7280"};'>{over_pct:.1f}%</div>
+                            </div>
+                            <div style='flex: 1; background: {"#fef2f2" if not over_winner else "#ffffff"}; border: 2px solid {"#ef4444" if not over_winner else "#e5e7eb"}; border-radius: 6px; padding: 8px; text-align: center;'>
+                                <div style='font-size: 9px; color: #888;'>UNDER</div>
+                                <div style='font-size: 18px; font-weight: 700; color: {"#dc2626" if not over_winner else "#6b7280"};'>{under_pct:.1f}%</div>
+                            </div>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                # Fila 2: 2.5 y 3.5
+                row2_col1, row2_col2 = st.columns(2)
+
+                with row2_col1:
+                    over_pct = ou["over_2_5"]["over"]
+                    under_pct = ou["over_2_5"]["under"]
+                    over_winner = over_pct > under_pct
+
+                    st.markdown(f"""
+                    <div style='background: #ffffff; border: 2px solid #e5e7eb; border-radius: 12px; padding: 12px;'>
+                        <div style='font-size: 11px; font-weight: 600; color: #888; margin-bottom: 8px; text-align: center; text-transform: uppercase; letter-spacing: 0.05em;'>
+                            GOLES + 2.5
+                        </div>
+                        <div style='display: flex; gap: 6px;'>
+                            <div style='flex: 1; background: {"#f0fdf4" if over_winner else "#ffffff"}; border: 2px solid {"#22c55e" if over_winner else "#e5e7eb"}; border-radius: 6px; padding: 8px; text-align: center;'>
+                                <div style='font-size: 9px; color: #888;'>OVER</div>
+                                <div style='font-size: 18px; font-weight: 700; color: {"#16a34a" if over_winner else "#6b7280"};'>{over_pct:.1f}%</div>
+                            </div>
+                            <div style='flex: 1; background: {"#fef2f2" if not over_winner else "#ffffff"}; border: 2px solid {"#ef4444" if not over_winner else "#e5e7eb"}; border-radius: 6px; padding: 8px; text-align: center;'>
+                                <div style='font-size: 9px; color: #888;'>UNDER</div>
+                                <div style='font-size: 18px; font-weight: 700; color: {"#dc2626" if not over_winner else "#6b7280"};'>{under_pct:.1f}%</div>
+                            </div>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                with row2_col2:
+                    over_pct = ou["over_3_5"]["over"]
+                    under_pct = ou["over_3_5"]["under"]
+                    over_winner = over_pct > under_pct
+
+                    st.markdown(f"""
+                    <div style='background: #ffffff; border: 2px solid #e5e7eb; border-radius: 12px; padding: 12px;'>
+                        <div style='font-size: 11px; font-weight: 600; color: #888; margin-bottom: 8px; text-align: center; text-transform: uppercase; letter-spacing: 0.05em;'>
+                            GOLES + 3.5
+                        </div>
+                        <div style='display: flex; gap: 6px;'>
+                            <div style='flex: 1; background: {"#f0fdf4" if over_winner else "#ffffff"}; border: 2px solid {"#22c55e" if over_winner else "#e5e7eb"}; border-radius: 6px; padding: 8px; text-align: center;'>
+                                <div style='font-size: 9px; color: #888;'>OVER</div>
+                                <div style='font-size: 18px; font-weight: 700; color: {"#16a34a" if over_winner else "#6b7280"};'>{over_pct:.1f}%</div>
+                            </div>
+                            <div style='flex: 1; background: {"#fef2f2" if not over_winner else "#ffffff"}; border: 2px solid {"#ef4444" if not over_winner else "#e5e7eb"}; border-radius: 6px; padding: 8px; text-align: center;'>
+                                <div style='font-size: 9px; color: #888;'>UNDER</div>
+                                <div style='font-size: 18px; font-weight: 700; color: {"#dc2626" if not over_winner else "#6b7280"};'>{under_pct:.1f}%</div>
+                            </div>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+            with col_saves:
+                st.markdown('<div class="section-title">🧤 Paradas del Portero</div>', unsafe_allow_html=True)
+                st.markdown("""
+                <div style='background: #f8f9fa; border-radius: 12px; padding: 60px 24px; text-align: center; color: #888;'>
+                    <div style='font-size: 14px;'>Próximamente</div>
+                </div>
+                """, unsafe_allow_html=True)
+
+            st.markdown("---")
+
+        # ═══════════════════════════════════════════════════════════
         # EXPANDERS
         # ═══════════════════════════════════════════════════════════
 
