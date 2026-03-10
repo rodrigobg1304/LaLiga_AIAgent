@@ -5,6 +5,7 @@ Arquitectura: 4 Random Forest independientes con calibración isotónica
 
 import sys
 import os
+from pathlib import Path
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
@@ -17,8 +18,7 @@ from datetime import datetime
 
 # Añadir path para imports
 sys.path.append(os.path.join(os.path.dirname(__file__), "../../src"))
-# sys.path.append(os.path.join(os.path.dirname(__file__), "../src"))
-from football_agent.db import run_query
+from football_agent.db import (run_query, get_matches_with_goals)
 
 # Importar función de features desde predict.py
 sys.path.append(os.path.join(os.path.dirname(__file__), "../"))
@@ -29,11 +29,14 @@ from predict import build_features_1x2
 # ═══════════════════════════════════════════════════════════
 
 LEAGUE_ID = "8"  # LaLiga
-YEARS_TRAIN = ['19/20', '20/21', '21/22', '22/23', '23/24']  # Últimas 5 temporadas
-YEARS_TEST = ['24/25']  # Temporada actual para validación
+YEARS_TRAIN = ['19/20', '20/21', '21/22', '22/23', '23/24', '24/25']  # Últimas 5 temporadas
+YEARS_TEST = ['25/26']  # Temporada actual para validación
 
-OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "../models")
-os.makedirs(OUTPUT_DIR, exist_ok=True)
+#OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "../models")
+OUTPUT_DIR_LALIGA = Path(__file__).parent.parent / "models" / "over_under" / "goals" / "production" / "laliga"
+
+# OUTPUT_DIR_LALIGA = os.path.join(OUTPUT_DIR, "over_under", "goals", "production", "laliga")
+OUTPUT_DIR_LALIGA.mkdir(parents=True, exist_ok=True)
 
 THRESHOLDS = [0.5, 1.5, 2.5, 3.5]
 
@@ -41,31 +44,11 @@ THRESHOLDS = [0.5, 1.5, 2.5, 3.5]
 # ═══════════════════════════════════════════════════════════
 # FUNCIONES AUXILIARES
 # ═══════════════════════════════════════════════════════════
-
 def get_all_matches(league_id: str, years: list) -> pd.DataFrame:
     """Obtiene todos los partidos con goles totales."""
-    years_str = ",".join([f"'{y}'" for y in years])
 
-    sql = f"""
-    SELECT 
-        matchId,
-        homeTeam, 
-        awayTeam,
-        LeagueId,
-        Year,
-        SUM(CASE WHEN name='Goals' AND period IN ('1ST','2ND') 
-            THEN CAST(homeValue AS DECIMAL) ELSE 0 END) AS home_goals,
-        SUM(CASE WHEN name='Goals' AND period IN ('1ST','2ND') 
-            THEN CAST(awayValue AS DECIMAL) ELSE 0 END) AS away_goals
-    FROM Leagues
-    WHERE LeagueId = %s 
-      AND Year IN ({years_str})
-      AND name = 'Goals'
-    GROUP BY matchId
-    ORDER BY Year ASC, CAST(Round AS SIGNED) ASC
-    """
-
-    rows = run_query(sql, (league_id,))
+    # ✅ Solo llamada a db.py
+    rows = get_matches_with_goals(league_id, years)
     df = pd.DataFrame(rows)
 
     if df.empty:
@@ -234,7 +217,7 @@ def main():
 
         # Guardar modelo
         model_filename = f"model_{col_name}_laliga.pkl"
-        model_path = os.path.join(OUTPUT_DIR, model_filename)
+        model_path = os.path.join(OUTPUT_DIR_LALIGA, model_filename)
 
         with open(model_path, 'wb') as f:
             pickle.dump(model, f)
@@ -244,7 +227,7 @@ def main():
         all_metrics[col_name] = metrics
 
     # 4. Guardar métricas
-    metrics_path = os.path.join(OUTPUT_DIR, "metrics_over_under_laliga.json")
+    metrics_path = os.path.join(OUTPUT_DIR_LALIGA, "metrics_over_under_laliga.json")
     with open(metrics_path, 'w') as f:
         json.dump(all_metrics, f, indent=2)
 

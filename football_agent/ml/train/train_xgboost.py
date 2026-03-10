@@ -1,25 +1,42 @@
 # train_xgboost.py
-import os, sys
+"""
+Script de entrenamiento de modelos XGBoost para predicción 1X2.
+Complementa a train_1x2.py (Random Forest) para crear ensembles.
+"""
+
+import os
+import sys
 import pandas as pd
 import numpy as np
 import xgboost as xgb
 from sklearn.metrics import log_loss, accuracy_score, classification_report
 import pickle
+import json
 from datetime import datetime
+from pathlib import Path
 
-sys.path.append(os.path.join(os.path.dirname(__file__), "../src"))
+# ✅ Añadir paths para imports
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../src"))
 
-# Importar funciones del train.py principal
-from train import (
-    logger, Config, load_data, calculate_elo,
-    calculate_form_features, calculate_h2h_features
+# ✅ Importar desde train_1x2.py (mismo directorio)
+from train_1x2 import (
+    logger,
+    Config,
+    load_data,
+    calculate_elo,
+    calculate_form_features,
+    calculate_h2h_features
 )
+
+# ✅ Importar desde constants.py
+from constants import MIN_PROB, RANDOM_STATE
 
 
 def prepare_features_xgb(df, league_name='laliga'):
     """
-    Igual que prepare_features() pero sin encodear target
-    XGBoost necesita labels 0, 1, 2 directamente
+    Igual que prepare_features() pero sin encodear target.
+    XGBoost necesita labels 0, 1, 2 directamente.
 
     Returns:
         X: np.array de features
@@ -66,6 +83,27 @@ def prepare_features_xgb(df, league_name='laliga'):
         'possession_balance', 'shots_balance', 'shots_on_target_balance'
     ]
 
+    # ✅ AÑADIR FEATURES ESPECÍFICAS DE PREMIER LEAGUE
+    if league_name == 'premier_league':
+        # Importar función desde train_1x2
+        from train_1x2 import add_premier_features
+
+        df = add_premier_features(df, league_name)
+
+        premier_features = [
+            'season_progress',
+            'is_early_season',
+            'is_late_season',
+            'home_form_momentum',
+            'away_form_momentum',
+            'ultra_balanced',
+            'underdog_home_vs_strong_away'
+        ]
+        feature_columns.extend(premier_features)
+        logger.info(f"  - Total features: {len(feature_columns)} (40 base + 7 Premier)")
+    else:
+        logger.info(f"  - Total features: {len(feature_columns)} (40 base)")
+
     # Validar columnas
     missing_cols = [col for col in feature_columns if col not in df.columns]
     if missing_cols:
@@ -99,8 +137,8 @@ def prepare_features_xgb(df, league_name='laliga'):
 
 def calculate_sample_weights(y_train, league_name):
     """
-    Calcula sample weights para cada instancia
-    XGBoost los usa para dar más importancia a ciertas clases
+    Calcula sample weights para cada instancia.
+    XGBoost los usa para dar más importancia a ciertas clases.
 
     Args:
         y_train: Labels (0, 1, 2)
@@ -141,7 +179,7 @@ def calculate_sample_weights(y_train, league_name):
 
 def train_xgboost_model(X_train, y_train, X_val, y_val, league_name):
     """
-    Entrena modelo XGBoost con early stopping
+    Entrena modelo XGBoost con early stopping.
 
     Args:
         X_train: Features de entrenamiento
@@ -179,7 +217,7 @@ def train_xgboost_model(X_train, y_train, X_val, y_val, league_name):
         early_stopping_rounds=20,  # Parar si no mejora en 20 rounds
 
         # Sistema
-        random_state=Config.RANDOM_STATE,
+        random_state=RANDOM_STATE,
         n_jobs=-1,
         verbosity=1  # Mostrar progreso
     )
@@ -222,9 +260,9 @@ def train_xgboost_model(X_train, y_train, X_val, y_val, league_name):
     return model
 
 
-def evaluate_xgboost(model, X_test, y_test):
+def evaluate_xgboost(model, X_test, y_test, league_name='laliga'):
     """
-    Evalúa modelo XGBoost y genera métricas
+    Evalúa modelo XGBoost y genera métricas.
 
     Args:
         model: Modelo entrenado
@@ -241,7 +279,7 @@ def evaluate_xgboost(model, X_test, y_test):
     y_pred_proba = model.predict_proba(X_test)
 
     # Aplicar MIN_PROB floor y re-normalizar
-    y_pred_proba = np.maximum(y_pred_proba, Config.MIN_PROB)
+    y_pred_proba = np.maximum(y_pred_proba, MIN_PROB)
     y_pred_proba = y_pred_proba / y_pred_proba.sum(axis=1, keepdims=True)
 
     # Métricas básicas
@@ -297,6 +335,17 @@ def evaluate_xgboost(model, X_test, y_test):
         'possession_balance', 'shots_balance', 'shots_on_target_balance'
     ]
 
+    if league_name == 'premier_league':
+        feature_names.extend([
+            'season_progress',
+            'is_early_season',
+            'is_late_season',
+            'home_form_momentum',
+            'away_form_momentum',
+            'ultra_balanced',
+            'underdog_home_vs_strong_away'
+        ])
+
     feature_importances = model.feature_importances_
     indices = np.argsort(feature_importances)[::-1][:15]
 
@@ -325,19 +374,23 @@ def evaluate_xgboost(model, X_test, y_test):
 
 def save_xgboost_model(model, metrics, league):
     """
-    Guarda modelo XGBoost y métricas
+    Guarda modelo XGBoost y métricas en la nueva estructura.
 
     Args:
         model: Modelo entrenado
         metrics: Dict con métricas
-        league: Nombre de la liga
+        league: Nombre de la liga (ej: 'premier_league')
     """
-    import json
+    # ✅ Usar nueva estructura de directorios
+    league_dir = Path(Config.LEAGUE_DIRS.get(league))
 
-    os.makedirs(Config.MODELS_DIR, exist_ok=True)
+    if league_dir is None:
+        raise ValueError(f"Liga '{league}' no configurada en Config.LEAGUE_DIRS")
 
-    model_path = f"{Config.MODELS_DIR}/model_xgboost_{league}.pkl"
-    metrics_path = f"{Config.MODELS_DIR}/training_metrics_xgboost_{league}.json"
+    league_dir.mkdir(parents=True, exist_ok=True)
+
+    model_path = league_dir / f"model_xgboost_{league}.pkl"
+    metrics_path = league_dir / f"training_metrics_xgboost_{league}.json"
 
     # Guardar modelo
     logger.info(f"  - Guardando modelo en {model_path}...")
@@ -358,7 +411,7 @@ def save_xgboost_model(model, metrics, league):
         'colsample_bytree': model.colsample_bytree,
         'min_child_weight': model.min_child_weight,
         'gamma': model.gamma,
-        'min_prob': Config.MIN_PROB,
+        'min_prob': MIN_PROB,
         'test_season': Config.TEST_SEASON
     }
 
@@ -367,12 +420,12 @@ def save_xgboost_model(model, metrics, league):
     with open(metrics_path, 'w') as f:
         json.dump(metrics, f, indent=2)
 
-    logger.success("  - Modelo y métricas guardados exitosamente")
+    logger.success(f"  - Modelo y métricas guardados en: {league_dir}")
 
 
 def train_league_xgboost(league_id, league_name):
     """
-    Pipeline de entrenamiento XGBoost para una liga
+    Pipeline de entrenamiento XGBoost para una liga.
 
     Args:
         league_id: ID de la liga
@@ -415,7 +468,7 @@ def train_league_xgboost(league_id, league_name):
     model = train_xgboost_model(X_train, y_train, X_val, y_val, league_name_normalized)
 
     # 6. Evaluar en test
-    metrics = evaluate_xgboost(model, X_test, y_test)
+    metrics = evaluate_xgboost(model, X_test, y_test, league_name_normalized)
 
     # 7. Guardar
     save_xgboost_model(model, metrics, league_name_normalized)

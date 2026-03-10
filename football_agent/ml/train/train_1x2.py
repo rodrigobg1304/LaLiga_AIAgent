@@ -11,7 +11,25 @@ import pickle
 from datetime import datetime
 import logging
 
-sys.path.append(os.path.join(os.path.dirname(__file__), "../src"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../"))
+from constants import (
+    FEATURES,
+    RECENT_WEIGHT,
+    HISTORICAL_WEIGHT,
+    ELO_K,
+    ELO_SCALE,
+    ELO_INITIAL,
+    ELO_SEASON_REGRESSION,
+    FORM_WINDOW,
+    H2H_LOOKBACK,
+    MIN_H2H_MATCHES,
+    MIN_PROB,
+    RANDOM_STATE,
+    LEAGUES,
+    TEST_SEASON
+)
+
+sys.path.append(os.path.join(os.path.dirname(__file__), "../../src"))
 # Importar funciones de tu db.py
 from football_agent.db import (TABLE, get_connection, run_query, get_league_all_stats)
 
@@ -85,35 +103,42 @@ logger.addHandler(handler)
 class Config:
     """Parámetros globales del modelo"""
     # Ligas a incluir
-    LEAGUES = {
-        '8': "LaLiga",
-        '17': "Premier League",
-        '23': "Serie A",
-    }
+    LEAGUES = LEAGUES
 
     # Split temporal
-    TEST_SEASON = '25/26'  # Última temporada para test
+    TEST_SEASON = TEST_SEASON
 
     # Features Elo
-    ELO_K = 40
-    ELO_SCALE = 600
+    ELO_K = ELO_K
+    ELO_SCALE = ELO_SCALE
     # ELO_HOME_ADVANTAGE = 50
-    ELO_INITIAL = 1500
+    ELO_INITIAL = ELO_INITIAL
 
     # Features Form
-    FORM_WINDOW = 10  # Últimos N partidos
-    FORM_WEIGHT_RECENT = 0.65  # 65% peso a forma reciente
+    FORM_WINDOW = FORM_WINDOW  # Últimos N partidos
+    FORM_WEIGHT_RECENT = RECENT_WEIGHT  # 65% peso a forma reciente
 
     # H2H
-    MIN_H2H_MATCHES = 2
-    H2H_LOOKBACK = 5  # Últimos 5 enfrentamientos
+    MIN_H2H_MATCHES = MIN_H2H_MATCHES
+    H2H_LOOKBACK = H2H_LOOKBACK  # Últimos 5 enfrentamientos
 
     # Modelo
-    MIN_PROB = 0.04  # Floor de probabilidad mínima
-    RANDOM_STATE = 42
+    MIN_PROB = MIN_PROB  # Floor de probabilidad mínima
+    RANDOM_STATE = RANDOM_STATE
 
     # Output (directorio base)
-    MODELS_DIR = './models'
+    MODELS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../models")
+    MODEL_1X2 = os.path.join(MODELS_DIR, "1x2", "production")
+    MODEL_1X2_LALIGA = os.path.join(MODEL_1X2, "laliga")
+    MODEL_1X2_PREMIER = os.path.join(MODEL_1X2, "premier_league")
+    MODEL_1X2_SERIEA = os.path.join(MODEL_1X2, "serie_a")
+
+    # Mapeo de nombres de ligas a directorios
+    LEAGUE_DIRS = {
+        'laliga': MODEL_1X2_LALIGA,
+        'premier_league': MODEL_1X2_PREMIER,
+        'serie_a': MODEL_1X2_SERIEA
+    }
 
 
 # ============================================================================
@@ -409,50 +434,56 @@ def calculate_form_features(df):
 
 def add_premier_features(df, league_name):
     """
-    Añade features específicas para Premier League
+    Añade features específicas de Premier League
 
     Args:
-        df: DataFrame con features base
+        df: DataFrame con features calculadas
         league_name: Nombre de la liga
 
     Returns:
-        pd.DataFrame: DataFrame con features adicionales si es Premier
+        DataFrame con features adicionales si es Premier League
     """
     if league_name != 'premier_league':
-        return df  # Solo aplicar a Premier
+        return df
 
     logger.info("  - Añadiendo features específicas de Premier League...")
 
     df = df.copy()
 
-    # 1. VARIABILIDAD/CAOS (Premier más impredecible)
-    # Calcular desviación estándar de goles en últimos N partidos
-    # Necesitamos acceso al histórico por equipo
+    # 1. Season progress (0-1, basado en número de jornada)
+    max_round = df['round'].max()
+    df['season_progress'] = df['round'] / max_round if max_round > 0 else 0
 
-    # 2. FASE DE TEMPORADA (early season más caótico)
-    df['season_progress'] = df['round'] / 38.0  # % de temporada completado
+    # 2. Is early season (primeras 10 jornadas)
     df['is_early_season'] = (df['round'] <= 10).astype(int)
-    df['is_late_season'] = (df['round'] >= 30).astype(int)
 
-    # 3. MOMENTUM/RACHA (últimos 3 partidos)
-    # Esto requiere calcular en calculate_form_features()
-    # Por ahora, usaremos proxy: diferencia entre form reciente vs histórica
-    df['home_form_momentum'] = df['home_win_rate'] - 0.4  # Desviación de media
-    df['away_form_momentum'] = df['away_win_rate'] - 0.3
+    # 3. Is late season (últimas 10 jornadas)
+    df['is_late_season'] = (df['round'] >= max_round - 10).astype(int)
 
-    # 4. EQUILIBRIO EXTREMO (cuando diferencias son MUY pequeñas)
-    df['ultra_balanced'] = (
-            (df['elo_diff_abs'] < 30) &
-            (df['form_balance'] < 0.08)
-    ).astype(int)
+    # 4. Home form momentum (diferencia entre forma reciente y histórica)
+    # Si forma reciente > histórica → momentum positivo
+    home_recent_avg = df['home_goals_for_avg']  # Simplificación
+    home_historical_avg = df['home_win_rate']
+    df['home_form_momentum'] = (home_recent_avg - home_historical_avg).fillna(0)
 
-    # 5. INTERACCIÓN: Equipos débiles en casa vs fuertes fuera
+    # 5. Away form momentum
+    away_recent_avg = df['away_goals_for_avg']
+    away_historical_avg = df['away_win_rate']
+    df['away_form_momentum'] = (away_recent_avg - away_historical_avg).fillna(0)
+
+    # 6. Ultra balanced (empates muy probables)
+    # Cuando elo_diff < 50 Y win_rates similares
+    elo_balanced = (df['elo_diff'].abs() < 50).astype(int)
+    win_rate_balanced = (df['form_balance'] < 0.1).astype(int)
+    df['ultra_balanced'] = (elo_balanced & win_rate_balanced).astype(int)
+
+    # 7. Underdog home vs strong away
+    # Home débil (elo < 1450) vs Away fuerte (elo > 1600)
     df['underdog_home_vs_strong_away'] = (
-            (df['elo_home'] < 1450) &
-            (df['elo_away'] > 1550)
+            (df['elo_home'] < 1450) & (df['elo_away'] > 1600)
     ).astype(int)
 
-    logger.success(f"  - {5} features específicas de Premier añadidas")
+    logger.success("  - 7 features específicas de Premier añadidas")
 
     return df
 
@@ -855,20 +886,20 @@ def get_teams_near_position(standings, target_position, margin=2):
 
 def prepare_features(df, league_name='laliga'):
     """
-    Prepara X, y para entrenamiento
+    Prepara features para el modelo, codifica target y retorna X, y.
 
     Args:
-        df: DataFrame con todas las features calculadas
+        df: DataFrame con features calculadas
+        league_name: Nombre de la liga
 
     Returns:
-        tuple: (X, y) arrays numpy para sklearn
+        X: np.array de features
+        y: np.array codificado (0, 1, 2)
     """
     logger.info("Preparando features para modelo...")
 
-    # ✅ CALCULAR FEATURES DE BALANCE/EQUILIBRIO
+    # Calcular features de balance
     df = df.copy()
-
-    # Diferencias absolutas (equilibrio = valores bajos)
     df['elo_diff_abs'] = np.abs(df['elo_diff'])
     df['form_balance'] = np.abs(df['home_win_rate'] - df['away_win_rate'])
     df['goals_balance'] = np.abs(df['home_goals_for_avg'] - df['away_goals_for_avg'])
@@ -876,67 +907,40 @@ def prepare_features(df, league_name='laliga'):
     df['shots_balance'] = np.abs(df['home_total_shots_avg'] - df['away_total_shots_avg'])
     df['shots_on_target_balance'] = np.abs(df['home_shots_on_target_avg'] - df['away_shots_on_target_avg'])
 
-    # Lista de columnas de features (EXTENDIDA)
-    feature_columns = [
-        # Elo (3)
-        'elo_home',
-        'elo_away',
-        'elo_diff',
-
-        # Form - Home BÁSICAS (4)
-        'home_win_rate',
-        'home_goals_for_avg',
-        'home_goals_against_avg',
-        'home_points_avg',
-
-        # Form - Home AVANZADAS (9)
-        'home_shots_on_target_avg',
-        'home_possession_avg',
-        'home_total_shots_avg',
-        'home_gk_saves_avg',
-        'home_big_chances_avg',
-        'home_accurate_passes_avg',
-        'home_tackles_won_avg',
-        'home_interceptions_avg',
-        'home_blocked_shots_avg',
-
-        # Form - Away BÁSICAS (4)
-        'away_win_rate',
-        'away_goals_for_avg',
-        'away_goals_against_avg',
-        'away_points_avg',
-
-        # Form - Away AVANZADAS (9)
-        'away_shots_on_target_avg',
-        'away_possession_avg',
-        'away_total_shots_avg',
-        'away_gk_saves_avg',
-        'away_big_chances_avg',
-        'away_accurate_passes_avg',
-        'away_tackles_won_avg',
-        'away_interceptions_avg',
-        'away_blocked_shots_avg',
-
-        # H2H (5)
-        'h2h_home_win_rate',
-        'h2h_home_goals_avg',
-        'h2h_away_goals_avg',
-        'h2h_total_goals_avg',
-        'h2h_used_proxy',
-
-        # ✅ FEATURES DE BALANCE (6)
-        'elo_diff_abs',
-        'form_balance',
-        'goals_balance',
-        'possession_balance',
-        'shots_balance',
-        'shots_on_target_balance'
-    ]
-
-    # Premier (balance ya calculado)
+    # ✅ AÑADIR FEATURES ESPECÍFICAS DE PREMIER LEAGUE
     df = add_premier_features(df, league_name)
 
-    # AÑADIR FEATURES PREMIER SI APLICA
+    # Lista de features BASE (40)
+    feature_columns = [
+        # Elo (3)
+        'elo_home', 'elo_away', 'elo_diff',
+
+        # Form - Home BÁSICAS (4)
+        'home_win_rate', 'home_goals_for_avg', 'home_goals_against_avg', 'home_points_avg',
+
+        # Form - Home AVANZADAS (9)
+        'home_shots_on_target_avg', 'home_possession_avg', 'home_total_shots_avg',
+        'home_gk_saves_avg', 'home_big_chances_avg', 'home_accurate_passes_avg',
+        'home_tackles_won_avg', 'home_interceptions_avg', 'home_blocked_shots_avg',
+
+        # Form - Away BÁSICAS (4)
+        'away_win_rate', 'away_goals_for_avg', 'away_goals_against_avg', 'away_points_avg',
+
+        # Form - Away AVANZADAS (9)
+        'away_shots_on_target_avg', 'away_possession_avg', 'away_total_shots_avg',
+        'away_gk_saves_avg', 'away_big_chances_avg', 'away_accurate_passes_avg',
+        'away_tackles_won_avg', 'away_interceptions_avg', 'away_blocked_shots_avg',
+
+        # H2H (5)
+        'h2h_home_win_rate', 'h2h_home_goals_avg', 'h2h_away_goals_avg',
+        'h2h_total_goals_avg', 'h2h_used_proxy',
+
+        # FEATURES DE BALANCE (6)
+        'elo_diff_abs', 'form_balance', 'goals_balance',
+        'possession_balance', 'shots_balance', 'shots_on_target_balance'
+    ]
+
+    # ✅ AÑADIR FEATURES DE PREMIER SI APLICA
     if league_name == 'premier_league':
         premier_features = [
             'season_progress',
@@ -952,44 +956,31 @@ def prepare_features(df, league_name='laliga'):
     else:
         logger.info(f"  - Total features: {len(feature_columns)} (40 base)")
 
-    # Validar que todas las columnas existen
+    # Validar columnas
     missing_cols = [col for col in feature_columns if col not in df.columns]
     if missing_cols:
-        raise ValueError(f"Columnas faltantes en DataFrame: {missing_cols}")
+        raise ValueError(f"Columnas faltantes en prepare_features: {missing_cols}")
 
-    # Convertir TODAS las features a float64 explícitamente
+    # Convertir a float64
     df_features = df[feature_columns].copy()
     for col in feature_columns:
         df_features[col] = pd.to_numeric(df_features[col], errors='coerce')
 
-    # Verificar tipos después de conversión
-    non_numeric = df_features.select_dtypes(exclude=[np.number]).columns.tolist()
-    if non_numeric:
-        logger.error(f"Columnas que no se pudieron convertir a numérico: {non_numeric}")
-        for col in non_numeric:
-            logger.error(f"  {col}: tipos únicos = {df_features[col].apply(type).unique()}")
-        raise ValueError(f"Features no numéricas detectadas: {non_numeric}")
+    # Imputar NaN si existen
+    if np.isnan(df_features.values).any():
+        from sklearn.impute import SimpleImputer
+        imputer = SimpleImputer(strategy='mean')
+        X = imputer.fit_transform(df_features.values)
+    else:
+        X = df_features.values
 
-    # Extraer features (X)
-    X = df_features.values
+    logger.success(f"  - Features preparadas: {X.shape}")
 
-    # Extraer target (y) y codificar
+    # Codificar target
     result_mapping = {'1': 0, 'X': 1, '2': 2}
     y = df['result'].map(result_mapping).values
 
-    # Verificar que no hay NaN
-    if np.isnan(X).any():
-        nan_counts = np.isnan(X).sum(axis=0)
-        nan_features = [(feature_columns[i], count) for i, count in enumerate(nan_counts) if count > 0]
-        logger.warning(f"Features con NaN detectados: {nan_features}")
-        logger.info("Imputando NaN con media de la columna...")
-
-        from sklearn.impute import SimpleImputer
-        imputer = SimpleImputer(strategy='mean')
-        X = imputer.fit_transform(X)
-
-    logger.success(f"  - Features preparadas: {X.shape}")
-    logger.info(f"  - Total features: {len(feature_columns)} (34 originales + 6 balance)")
+    logger.info(f"  - Total features: {len(feature_columns)} ({len(feature_columns) - 6} originales + 6 balance)")
     logger.info(f"  - Distribución target: 1={np.sum(y == 0)} ({np.sum(y == 0) / len(y) * 100:.1f}%), "
                 f"X={np.sum(y == 1)} ({np.sum(y == 1) / len(y) * 100:.1f}%), "
                 f"2={np.sum(y == 2)} ({np.sum(y == 2) / len(y) * 100:.1f}%)")
@@ -1204,14 +1195,22 @@ def save_model(model, metrics, league):
     Args:
         model: Modelo entrenado
         metrics: Dict con métricas
-        league: Nombre de la liga (ej: 'laliga')
+        league: Nombre de la liga (ej: 'laliga', 'premier_league', 'serie_a')
     """
     import json
 
-    os.makedirs(Config.MODELS_DIR, exist_ok=True)
+    # ✅ Obtener directorio de la liga desde Config
+    league_dir = Config.LEAGUE_DIRS.get(league)
 
-    model_path = f"{Config.MODELS_DIR}/model_1x2_{league}.pkl"
-    metrics_path = f"{Config.MODELS_DIR}/training_metrics_{league}.json"
+    if league_dir is None:
+        raise ValueError(f"Liga '{league}' no configurada en Config.LEAGUE_DIRS")
+
+    # Crear directorio si no existe
+    os.makedirs(league_dir, exist_ok=True)
+
+    # Rutas de archivos
+    model_path = os.path.join(league_dir, f"model_1x2_{league}.pkl")
+    metrics_path = os.path.join(league_dir, f"training_metrics_{league}.json")
 
     # Guardar modelo
     logger.info(f"  - Guardando modelo en {model_path}...")
@@ -1228,8 +1227,8 @@ def save_model(model, metrics, league):
     metrics['config'] = {
         'elo_k': Config.ELO_K,
         'elo_scale': Config.ELO_SCALE,
-        'elo_system': 'dual_home_away',  # ✅ Indicar que usa Elo dual
-        'elo_initial': Config.ELO_INITIAL,  # ✅ Añadir valor inicial
+        'elo_system': 'dual_home_away',
+        'elo_initial': Config.ELO_INITIAL,
         'form_window': Config.FORM_WINDOW,
         'form_weight_recent': Config.FORM_WEIGHT_RECENT,
         'h2h_min_matches': Config.MIN_H2H_MATCHES,
@@ -1258,7 +1257,7 @@ def save_model(model, metrics, league):
     with open(metrics_path, 'w') as f:
         json.dump(metrics_native, f, indent=2)
 
-    logger.success(f"  - Modelo y métricas guardados exitosamente")
+    logger.success(f"  - Modelo y métricas guardados en: {league_dir}")
 
 
 def train_league(league_id, league_name):
@@ -1290,12 +1289,14 @@ def train_league(league_id, league_name):
     logger.info(f"Train: {len(train_df)} partidos")
     logger.info(f"Test: {len(test_df)} partidos")
 
+    # ✅ Normalizar nombre de liga
+    league_name_normalized = league_name.lower().replace(" ", "_")
+
     # 4. Preparar features
-    X_train, y_train = prepare_features(train_df)
-    X_test, y_test = prepare_features(test_df)
+    X_train, y_train = prepare_features(train_df, league_name_normalized)
+    X_test, y_test = prepare_features(test_df, league_name_normalized)
 
     # 5. Entrenar
-    league_name_normalized = league_name.lower().replace(" ", "_")
     model = train_model(X_train, y_train, league_name_normalized)
 
     # 6. Evaluar

@@ -1,16 +1,29 @@
-# ensemble_premier.py
-import os, sys
+import os
+import sys
 import numpy as np
 import pickle
+import json
 import pandas as pd
 from sklearn.metrics import accuracy_score, classification_report, log_loss
+from datetime import datetime
+from pathlib import Path
 
-sys.path.append(os.path.join(os.path.dirname(__file__), "../src"))
+# ✅ Añadir parent directory al path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../src"))
 
-from train import (
-    logger, Config, load_data, calculate_elo,
-    calculate_form_features, calculate_h2h_features
+# ✅ Importar desde train_1x2.py (mismo directorio)
+from train_1x2 import (
+    logger,
+    Config,
+    load_data,
+    calculate_elo,
+    calculate_form_features,
+    calculate_h2h_features,
+    prepare_features  # ← Usaremos esta en vez de prepare_features_xgb
 )
+
+from constants import MIN_PROB
 
 from train_xgboost import prepare_features_xgb
 
@@ -24,8 +37,21 @@ def load_models(league='premier_league'):
     """
     logger.info(f"Cargando modelos para {league}...")
 
-    rf_path = f"./models/model_1x2_{league}.pkl"
-    xgb_path = f"./models/model_xgboost_{league}.pkl"
+    # ✅ Usar nueva estructura de directorios
+    league_dir = Config.LEAGUE_DIRS.get(league)
+
+    if league_dir is None:
+        raise ValueError(f"Liga '{league}' no configurada en Config.LEAGUE_DIRS")
+
+    rf_path = Path(league_dir) / f"model_1x2_{league}.pkl"
+    xgb_path = Path(league_dir) / f"model_xgboost_{league}.pkl"
+
+    # Verificar que existen
+    if not rf_path.exists():
+        raise FileNotFoundError(f"Modelo RF no encontrado: {rf_path}")
+    if not xgb_path.exists():
+        raise FileNotFoundError(f"Modelo XGBoost no encontrado: {xgb_path}\n"
+                                f"⚠️  Primero debes entrenar el modelo XGBoost para Premier League")
 
     with open(rf_path, 'rb') as f:
         rf_model = pickle.load(f)
@@ -38,7 +64,7 @@ def load_models(league='premier_league'):
     return rf_model, xgb_model
 
 
-def ensemble_predict(rf_model, xgb_model, X, rf_weight=0.7, xgb_weight=0.3, min_prob=0.04):
+def ensemble_predict(rf_model, xgb_model, X, rf_weight=0.7, xgb_weight=0.3):
     """
     Combina predicciones de RF y XGBoost con weighted average
 
@@ -48,7 +74,6 @@ def ensemble_predict(rf_model, xgb_model, X, rf_weight=0.7, xgb_weight=0.3, min_
         X: Features (np.array)
         rf_weight: Peso para RF (default 0.7)
         xgb_weight: Peso para XGBoost (default 0.3)
-        min_prob: Floor mínimo de probabilidad
 
     Returns:
         tuple: (y_pred, y_pred_proba)
@@ -60,8 +85,8 @@ def ensemble_predict(rf_model, xgb_model, X, rf_weight=0.7, xgb_weight=0.3, min_
     # Weighted average
     ensemble_proba = (rf_weight * rf_proba) + (xgb_weight * xgb_proba)
 
-    # Aplicar MIN_PROB floor
-    ensemble_proba = np.maximum(ensemble_proba, min_prob)
+    # ✅ Usar MIN_PROB de constants.py
+    ensemble_proba = np.maximum(ensemble_proba, MIN_PROB)
 
     # Re-normalizar
     ensemble_proba = ensemble_proba / ensemble_proba.sum(axis=1, keepdims=True)
@@ -216,12 +241,11 @@ def save_ensemble_config(best_config, league='premier_league'):
         best_config: Dict con mejor configuración
         league: Nombre de la liga
     """
-    import json
-    from datetime import datetime
+    # ✅ Usar nueva estructura de directorios
+    league_dir = Path(Config.LEAGUE_DIRS.get(league))
+    league_dir.mkdir(parents=True, exist_ok=True)
 
-    os.makedirs(Config.MODELS_DIR, exist_ok=True)
-
-    config_path = f"{Config.MODELS_DIR}/ensemble_config_{league}.json"
+    config_path = league_dir / f"ensemble_config_{league}.json"
 
     # Añadir metadata
     ensemble_config = {
@@ -236,8 +260,8 @@ def save_ensemble_config(best_config, league='premier_league'):
             'classification_report': best_config['classification_report']
         },
         'usage': {
-            'rf_model_path': f'./models/model_1x2_{league}.pkl',
-            'xgb_model_path': f'./models/model_xgboost_{league}.pkl',
+            'rf_model_path': str(league_dir / f'model_1x2_{league}.pkl'),
+            'xgb_model_path': str(league_dir / f'model_xgboost_{league}.pkl'),
             'instructions': 'Load both models and use weighted average with specified weights'
         }
     }
@@ -246,7 +270,7 @@ def save_ensemble_config(best_config, league='premier_league'):
     with open(config_path, 'w') as f:
         json.dump(ensemble_config, f, indent=2)
 
-    logger.success("  - Configuración ensemble guardada exitosamente")
+    logger.success(f"  - Configuración ensemble guardada en: {league_dir}")
 
 
 def main():
@@ -272,11 +296,18 @@ def main():
     test_df = df[df['season'] == Config.TEST_SEASON].copy()
     logger.info(f"Test: {len(test_df)} partidos (season {Config.TEST_SEASON})")
 
-    # 4. Preparar features (usar función de XGBoost que no encodea)
-    X_test, y_test = prepare_features_xgb(test_df, league_name)
+    # 4. ✅ Preparar features (usar función de train_1x2.py)
+    X_test, y_test = prepare_features(test_df, league_name)
 
     # 5. Cargar modelos
-    rf_model, xgb_model = load_models(league_name)
+    try:
+        rf_model, xgb_model = load_models(league_name)
+    except FileNotFoundError as e:
+        logger.error(str(e))
+        logger.error("\n❌ Para ejecutar ensemble, primero necesitas:")
+        logger.error("   1. Entrenar modelo XGBoost: python train_xgboost_premier.py")
+        logger.error("   2. Luego ejecutar este script")
+        return
 
     # 6. Grid search de pesos
     results, best_config = grid_search_weights(rf_model, xgb_model, X_test, y_test)

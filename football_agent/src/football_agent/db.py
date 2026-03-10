@@ -719,6 +719,115 @@ def get_team_matches_total_goals(team: str, years: list[str], n: Optional[int] =
     return run_query(sql, tuple(params))
 
 
+def get_league_all_stats(league_id: str) -> list[dict]:
+    """
+    Obtiene todos los partidos de una liga con TODAS las stats pivotadas.
+    Usado para entrenamiento de modelos (carga masiva).
+
+    :param league_id: ID de la liga (ej: '8' para LaLiga)
+    :return: Lista de dicts con matchId, season, round, teams, y 10 stats pivotadas
+    """
+    sql = f"""
+        SELECT 
+            matchId,
+            Year as season,
+            CAST(Round AS SIGNED) as round,
+            homeTeam as home_team,
+            awayTeam as away_team,
+            LeagueId as league_id,
+
+            -- Goals
+            MAX(CASE WHEN name = 'Goals' THEN CAST(homeValue AS SIGNED) END) as home_goals,
+            MAX(CASE WHEN name = 'Goals' THEN CAST(awayValue AS SIGNED) END) as away_goals,
+
+            -- Shots on target
+            MAX(CASE WHEN name = 'Shots on target' THEN CAST(homeValue AS SIGNED) END) as home_shots_on_target,
+            MAX(CASE WHEN name = 'Shots on target' THEN CAST(awayValue AS SIGNED) END) as away_shots_on_target,
+
+            -- Ball possession
+            MAX(CASE WHEN name = 'Ball possession' THEN CAST(homeValue AS SIGNED) END) as home_possession,
+            MAX(CASE WHEN name = 'Ball possession' THEN CAST(awayValue AS SIGNED) END) as away_possession,
+
+            -- Total shots
+            MAX(CASE WHEN name = 'Total shots' THEN CAST(homeValue AS SIGNED) END) as home_total_shots,
+            MAX(CASE WHEN name = 'Total shots' THEN CAST(awayValue AS SIGNED) END) as away_total_shots,
+
+            -- Goalkeeper saves
+            MAX(CASE WHEN name = 'Goalkeeper saves' THEN CAST(homeValue AS SIGNED) END) as home_gk_saves,
+            MAX(CASE WHEN name = 'Goalkeeper saves' THEN CAST(awayValue AS SIGNED) END) as away_gk_saves,
+
+            -- Big chances
+            MAX(CASE WHEN name = 'Big chances' THEN CAST(homeValue AS SIGNED) END) as home_big_chances,
+            MAX(CASE WHEN name = 'Big chances' THEN CAST(awayValue AS SIGNED) END) as away_big_chances,
+
+            -- Accurate passes
+            MAX(CASE WHEN name = 'Accurate passes' THEN CAST(homeValue AS SIGNED) END) as home_accurate_passes,
+            MAX(CASE WHEN name = 'Accurate passes' THEN CAST(awayValue AS SIGNED) END) as away_accurate_passes,
+
+            -- Tackles won
+            MAX(CASE WHEN name = 'Tackles won' THEN CAST(homeValue AS SIGNED) END) as home_tackles_won,
+            MAX(CASE WHEN name = 'Tackles won' THEN CAST(awayValue AS SIGNED) END) as away_tackles_won,
+
+            -- Interceptions
+            MAX(CASE WHEN name = 'Interceptions' THEN CAST(homeValue AS SIGNED) END) as home_interceptions,
+            MAX(CASE WHEN name = 'Interceptions' THEN CAST(awayValue AS SIGNED) END) as away_interceptions,
+
+            -- Blocked shots
+            MAX(CASE WHEN name = 'Blocked shots' THEN CAST(homeValue AS SIGNED) END) as home_blocked_shots,
+            MAX(CASE WHEN name = 'Blocked shots' THEN CAST(awayValue AS SIGNED) END) as away_blocked_shots,
+
+            -- Resultado (derivado de Goals)
+            CASE 
+                WHEN MAX(CASE WHEN name = 'Goals' THEN CAST(homeValue AS SIGNED) END) > 
+                     MAX(CASE WHEN name = 'Goals' THEN CAST(awayValue AS SIGNED) END) THEN '1'
+                WHEN MAX(CASE WHEN name = 'Goals' THEN CAST(homeValue AS SIGNED) END) < 
+                     MAX(CASE WHEN name = 'Goals' THEN CAST(awayValue AS SIGNED) END) THEN '2'
+                ELSE 'X'
+            END as result
+
+        FROM {TABLE}
+        WHERE LeagueId = %s
+        GROUP BY matchId, Year, CAST(Round AS SIGNED), homeTeam, awayTeam, LeagueId
+        ORDER BY Year ASC, CAST(Round AS SIGNED) ASC
+    """
+
+    return run_query(sql, (league_id,))
+
+
+def get_matches_with_goals(league_id: str, years: list[str]) -> list[dict]:
+    """
+    Obtiene partidos con goles totales para entrenamiento Over/Under.
+
+    :param league_id: ID de la liga
+    :param years: Lista de años/temporadas (ej: ['23/24', '24/25'])
+    :return: Lista de dicts con matchId, teams, home_goals, away_goals
+    """
+    if not years:
+        return []
+
+    years_str = ",".join([f"'{y}'" for y in years])
+
+    sql = f"""
+        SELECT 
+            matchId,
+            homeTeam, 
+            awayTeam,
+            LeagueId,
+            Year,
+            SUM(CASE WHEN name='Goals' AND period IN ('1ST','2ND') 
+                THEN CAST(homeValue AS DECIMAL) ELSE 0 END) AS home_goals,
+            SUM(CASE WHEN name='Goals' AND period IN ('1ST','2ND') 
+                THEN CAST(awayValue AS DECIMAL) ELSE 0 END) AS away_goals
+        FROM {TABLE}
+        WHERE LeagueId = %s 
+          AND Year IN ({years_str})
+          AND name = 'Goals'
+        GROUP BY matchId, homeTeam, awayTeam, LeagueId, Year
+        ORDER BY Year ASC, CAST(Round AS SIGNED) ASC
+    """
+
+    return run_query(sql, (league_id,))
+
 if __name__ == '__main__':
     team_test = "real-betis"
     matches_test = 5

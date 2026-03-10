@@ -18,18 +18,34 @@ from football_agent.db import (run_query, TABLE, get_all_matches_chronological, 
                                get_team_stat_average, get_team_multiple_stats_average,
                                get_team_win_rates, get_team_goals_conceded_average, get_team_matches_total_goals)
 
-try:
-#     # from ml.train import HybridCalibratedModel  # noqa: F401
-     from ml.train import FEATURES
-except ModuleNotFoundError:
-#     # from train_old import HybridCalibratedModel  # noqa: F401
-     from train_old import FEATURES
+from constants import (
+    FEATURES,
+    RECENT_WEIGHT,
+    HISTORICAL_WEIGHT,
+    WIN_RATE_RECENT_WEIGHT,
+    WIN_RATE_HISTORICAL_WEIGHT,
+    ELO_K,
+    ELO_SCALE,
+    ELO_HOME_ADVANTAGE,
+    ELO_INITIAL,
+    MIN_PROB,
+    FORM_WINDOW,
+    H2H_LOOKBACK,
+    MIN_H2H_MATCHES
+)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # DEFINICIÓN DE VARIABLES GLOBALES
 # ══════════════════════════════════════════════════════════════════════════════
 MODELS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
+MODEL_1X2 = os.path.join(MODELS_DIR, "1x2", "production")
+MODEL_1X2_LALIGA = os.path.join(MODEL_1X2, "laliga")
+MODEL_1X2_PREMIER = os.path.join(MODEL_1X2, "premier_league")
+MODEL_1X2_SERIEA = os.path.join(MODEL_1X2, "serie_a")
+
+MODEL_OVER_UNDER_GOALS = os.path.join(MODELS_DIR, "over_under", "goals", "production")
+MODEL_OVER_UNDER_GOALS_LALIGA = os.path.join(MODEL_OVER_UNDER_GOALS, "laliga")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # MODEL MANAGER PARA 1X2 (RF + ENSEMBLE)
@@ -46,10 +62,8 @@ class ModelManager1X2:
         """Carga todos los modelos 1X2 al iniciar"""
         print("🔄 Cargando modelos 1X2...")
 
-        models_dir = MODELS_DIR  # Usa el mismo directorio que ya tienes
-
         # LaLiga - Random Forest
-        laliga_path = os.path.join(models_dir, "model_1x2_laliga.pkl")
+        laliga_path = os.path.join(MODEL_1X2_LALIGA, "model_1x2_laliga.pkl")
         if os.path.exists(laliga_path):
             with open(laliga_path, 'rb') as f:
                 self.models['8'] = {  # league_id 8 = LaLiga
@@ -59,7 +73,7 @@ class ModelManager1X2:
             print("  ✅ LaLiga: Random Forest cargado")
 
         # Serie A - Random Forest
-        seriea_path = os.path.join(models_dir, "model_1x2_serie_a.pkl")
+        seriea_path = os.path.join(MODEL_1X2_SERIEA, "model_1x2_serie_a.pkl")
         if os.path.exists(seriea_path):
             with open(seriea_path, 'rb') as f:
                 self.models['23'] = {  # league_id 23 = Serie A
@@ -69,9 +83,9 @@ class ModelManager1X2:
             print("  ✅ Serie A: Random Forest cargado")
 
         # Premier League - Ensemble (RF + XGBoost)
-        premier_rf_path = os.path.join(models_dir, "model_1x2_premier_league.pkl")
-        premier_xgb_path = os.path.join(models_dir, "model_xgboost_premier_league.pkl")
-        ensemble_config_path = os.path.join(models_dir, "ensemble_config_premier_league.json")
+        premier_rf_path = os.path.join(MODEL_1X2_PREMIER, "model_1x2_premier_league.pkl")
+        premier_xgb_path = os.path.join(MODEL_1X2_PREMIER, "model_xgboost_premier_league.pkl")
+        ensemble_config_path = os.path.join(MODEL_1X2_PREMIER, "ensemble_config_premier_league.json")
 
         if os.path.exists(premier_rf_path) and os.path.exists(premier_xgb_path):
             with open(premier_rf_path, 'rb') as f:
@@ -183,7 +197,7 @@ class ModelManager1X2:
         # print(f"[DEBUG BLEND] probas_BLEND: 1={probas_blended[0] * 100:.1f}% X={probas_blended[1] * 100:.1f}% 2={probas_blended[2] * 100:.1f}%")
 
         # ── PASO 5: APLICAR MIN_PROB FLOOR ──
-        MIN_PROB = 0.04
+        MIN_PROB = MIN_PROB
         probas_blended = np.maximum(probas_blended, MIN_PROB)
 
         # ── PASO 6: RE-NORMALIZAR ──
@@ -228,7 +242,7 @@ class ModelManagerOverUnder:
 
         for threshold in self.thresholds:
             threshold_str = str(threshold).replace(".", "_")
-            model_path = os.path.join(MODELS_DIR, f"model_over_{threshold_str}_{league_name}.pkl")
+            model_path = os.path.join(MODEL_OVER_UNDER_GOALS_LALIGA, f"model_over_{threshold_str}_{league_name}.pkl")
 
             if not os.path.exists(model_path):
                 print(f"⚠️  Modelo Over/Under {threshold} no encontrado para {league_name}")
@@ -1365,35 +1379,9 @@ def predict(req: PredictionRequest):
     confidence = get_match_confidence(result_proba, elo_diff, req.league_id)
     odds = calculate_odds(result_proba, margin=0.07)
 
-#    # ══════════════════════════════════════════════════════════════════════════
-#    # OVER/UNDER (tu código existente - NO CAMBIAR)
-#    # ══════════════════════════════════════════════════════════════════════════
-#
-#    raw_over_probs = {}
-#    for t in OVER_THRESHOLDS:
-#        key = str(t)
-#        model_o = over_models[key]["model"]
-#        calibrator = over_models[key].get("calibrator")
-#        raw_proba = model_o.predict_proba(X)[0][1]
-#
-#        if calibrator is not None:
-#            raw_over_probs[t] = float(np.clip(calibrator.predict([raw_proba])[0], 0.01, 0.99))
-#        else:
-#            raw_over_probs[t] = float(np.clip(raw_proba, 0.01, 0.99))
-#
-#    over_under = {}
-#    for t in OVER_THRESHOLDS:
-#        over_prob = raw_over_probs[t]
-#        over_pct = round(over_prob * 100, 4)
-#        under_pct = round((1 - over_prob) * 100, 4)
-#        over_under[f"over_{str(t).replace('.', '_')}"] = {
-#            "over": over_pct,
-#            "under": under_pct,
-#            "odds_over": round((1 / (over_pct / 100)) * (1 + 0.07), 2) if over_pct > 0 else 999,
-#            "odds_under": round((1 / (under_pct / 100)) * (1 + 0.07), 2) if under_pct > 0 else 999,
-#        }
-
-    # Predicción Over/Under
+    # ══════════════════════════════════════════════════════════════════════════
+    # OVER/UNDER (tu código existente - NO CAMBIAR)
+    # ══════════════════════════════════════════════════════════════════════════
     result_proba_ou = model_manager_ou.predict_over_under(home_team=req.home_team, away_team=req.away_team,
                                                           year=req.year, league_id=req.league_id)
 
