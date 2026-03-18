@@ -86,3 +86,8 @@ LEAGUE_NAMES_NORMALIZED = {
 # ═══════════════════════════════════════════════════════════
 
 TEST_SEASON = '25/26'       # Temporada actual para testing
+
+# ═══════════════════════════════════════════════════════════
+# MODELOS
+# ═══════════════════════════════════════════════════════════
+MODEL_1X2_PREMIER = "/Users/rodrigobenitogarcia/PycharmProjects/LaLiga_AIAgent/football_agent/ml/models/1x2/production/premier_league"

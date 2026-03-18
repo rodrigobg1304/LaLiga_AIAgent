@@ -117,13 +117,14 @@ class ModelManager1X2:
 
         print("✅ Modelos 1X2 cargados exitosamente")
 
-    def predict_1x2(self, league_id: str, features_40: np.ndarray, elo_diff: float) -> dict:
+    def predict_1x2(self, league_id: str, features: np.ndarray,
+                    elo_diff: float) -> dict:  # ← Cambiar features_40 por features
         """
         Predice 1X2 usando Bayesian Blend dinámico: Elo + Modelo ML
 
         Args:
             league_id: '8', '17', o '23'
-            features_40: Array numpy con 40 features
+            features: Array numpy con features (40 para LaLiga/Serie A, 47 para Premier)  # ← Actualizar doc
             elo_diff: Diferencia elo_home - elo_away (para calcular blend weight)
 
         Returns:
@@ -143,7 +144,7 @@ class ModelManager1X2:
         if model_config['type'] == 'rf':
             # Random Forest simple (LaLiga, Serie A)
             model = model_config['model']
-            probas_ml = model.predict_proba(features_40)[0]  # Shape: (3,)
+            probas_ml = model.predict_proba(features)[0]  # ← Cambiar features_40 por features
 
         elif model_config['type'] == 'ensemble':
             # Ensemble RF + XGBoost (Premier)
@@ -153,8 +154,8 @@ class ModelManager1X2:
             xgb_weight = model_config['xgb_weight']
 
             # Predicciones de cada modelo
-            rf_probas = rf_model.predict_proba(features_40)[0]
-            xgb_probas = xgb_model.predict_proba(features_40)[0]
+            rf_probas = rf_model.predict_proba(features)[0]  # ← Cambiar features_40 por features
+            xgb_probas = xgb_model.predict_proba(features)[0]  # ← Cambiar features_40 por features
 
             # Weighted average
             probas_ml = (rf_weight * rf_probas) + (xgb_weight * xgb_probas)
@@ -197,7 +198,6 @@ class ModelManager1X2:
         # print(f"[DEBUG BLEND] probas_BLEND: 1={probas_blended[0] * 100:.1f}% X={probas_blended[1] * 100:.1f}% 2={probas_blended[2] * 100:.1f}%")
 
         # ── PASO 5: APLICAR MIN_PROB FLOOR ──
-        MIN_PROB = MIN_PROB
         probas_blended = np.maximum(probas_blended, MIN_PROB)
 
         # ── PASO 6: RE-NORMALIZAR ──
@@ -1199,34 +1199,28 @@ def build_features(home_team: str, away_team: str, year: Optional[str],
 def build_features_1x2(home_team: str, away_team: str, year: Optional[str],
                        league_id: str = "8") -> np.ndarray:
     """
-    Construye vector de 40 features para modelos 1X2 (RF/XGBoost)
-    VERSIÓN OPTIMIZADA CON CACHÉ
+    Construye vector de features para modelos 1X2 (RF/XGBoost)
+    - 40 features base para LaLiga/Serie A
+    - 47 features (40 + 7 Premier) para Premier League
     """
     features = {}
     standings = get_league_standings(league_id, year) if year else []
 
-    # ── 1. FEATURES ELO (3 features) - YA TIENE CACHÉ ──
+    # ── 1. FEATURES ELO (3 features) ──
     elo_data = get_elo(home_team, away_team)
     features['elo_home'] = elo_data['elo_home']
     features['elo_away'] = elo_data['elo_away']
     features['elo_diff'] = elo_data['elo_diff']
 
-    # print(f"[DEBUG ELO] home_team={home_team}, home_elo={features['elo_home']}")
-    # print(f"[DEBUG ELO] away_team={away_team}, away_elo={features['elo_away']}")
-    # print(f"[DEBUG ELO] elo_diff={features['elo_diff']}")
-
-    # ── 2. FEATURES DE EQUIPO CON CACHÉ (26 features = 13 x 2) ──
+    # ── 2. FEATURES DE EQUIPO (26 features = 13 x 2) ──
     for team, role in [(home_team, "home"), (away_team, "away")]:
         season_count = get_team_season_count(team, year) if year else 2
 
         if season_count < 2 and standings:
-            # Usar proxy si no hay histórico (NO cachear proxies)
             team_features = get_features_from_neighbors(team, role, year, league_id, standings)
         else:
-            # ← USAR CACHÉ AQUÍ
             team_features = get_team_features_cached(team, role, year, league_id, n=5)
 
-        # Extraer features (igual que antes)
         features[f'{role}_win_rate'] = team_features.get(f'{role}_win_rate_{role}', 0)
         features[f'{role}_goals_for_avg'] = team_features.get(f'{role}_avg_goals_scored', 0)
         features[f'{role}_goals_against_avg'] = team_features.get(f'{role}_avg_goals_conceded_global', 0)
@@ -1242,7 +1236,7 @@ def build_features_1x2(home_team: str, away_team: str, year: Optional[str],
         features[f'{role}_interceptions_avg'] = team_features.get(f'{role}_avg_Interceptions', 0)
         features[f'{role}_blocked_shots_avg'] = team_features.get(f'{role}_avg_Blocked shots', 0)
 
-    # ── 3. FEATURES H2H CON CACHÉ (5 features) ──
+    # ── 3. FEATURES H2H (5 features) ──
     h2h = get_h2h_features_cached(home_team, away_team, league_id, year, n=5)
     features['h2h_home_win_rate'] = h2h.get('h2h_home_wins', 0.33)
     features['h2h_home_goals_avg'] = h2h.get('h2h_avg_goals', 0) / 2
@@ -1259,7 +1253,7 @@ def build_features_1x2(home_team: str, away_team: str, year: Optional[str],
     features['shots_on_target_balance'] = abs(
         features['home_shots_on_target_avg'] - features['away_shots_on_target_avg'])
 
-    # ── 5. CONVERTIR A NUMPY ARRAY (40 features) ──
+    # ── 5. ORDEN BASE DE FEATURES (40) ──
     feature_order = [
         'elo_home', 'elo_away', 'elo_diff',
         'home_win_rate', 'home_goals_for_avg', 'home_goals_against_avg', 'home_points_avg',
@@ -1276,9 +1270,47 @@ def build_features_1x2(home_team: str, away_team: str, year: Optional[str],
         'possession_balance', 'shots_balance', 'shots_on_target_balance'
     ]
 
-    feature_vector = np.array([[features.get(col, 0.0) for col in feature_order]], dtype=np.float64)
-    return feature_vector
+    # ── 6. ✅ SOLO PARA PREMIER LEAGUE: AÑADIR 7 FEATURES ADICIONALES ──
+    if league_id == '17':  # ← CRÍTICO: Solo Premier League
+        # 1. Season progress
+        features['season_progress'] = 0.5
 
+        # 2-3. Early/Late season
+        features['is_early_season'] = 0
+        features['is_late_season'] = 0
+
+        # 4. Home form momentum
+        features['home_form_momentum'] = features['home_goals_for_avg'] - features['home_win_rate']
+
+        # 5. Away form momentum
+        features['away_form_momentum'] = features['away_goals_for_avg'] - features['away_win_rate']
+
+        # 6. Ultra balanced
+        elo_balanced = 1 if abs(features['elo_diff']) < 50 else 0
+        form_balanced = 1 if features['form_balance'] < 0.1 else 0
+        features['ultra_balanced'] = elo_balanced * form_balanced
+
+        # 7. Underdog home vs strong away
+        features['underdog_home_vs_strong_away'] = 1 if (
+                    features['elo_home'] < 1450 and features['elo_away'] > 1600) else 0
+
+        # ✅ Extender feature_order SOLO para Premier
+        feature_order.extend([
+            'season_progress',
+            'is_early_season',
+            'is_late_season',
+            'home_form_momentum',
+            'away_form_momentum',
+            'ultra_balanced',
+            'underdog_home_vs_strong_away'
+        ])
+
+    # ── 7. CONVERTIR A NUMPY ARRAY ──
+    # LaLiga/Serie A: 40 features
+    # Premier League: 47 features
+    feature_vector = np.array([[features.get(col, 0.0) for col in feature_order]], dtype=np.float64)
+
+    return feature_vector
 
 # ─────────────────────────────────────────────
 # CONFIDENCE
@@ -1347,7 +1379,7 @@ def predict(req: PredictionRequest):
     # model_result, calibrated_model, label_encoder, feature_cols, elo_threshold, over_models = load_models(req.league_id)
 
     try:
-        # ── NUEVAS FEATURES PARA 1X2 (40 dimensiones) ──
+        # ── FEATURES PARA 1X2 (40 o 47 dimensiones según liga) ──
         X_1x2 = build_features_1x2(req.home_team, req.away_team, req.year, req.league_id)
 
     except Exception as e:
@@ -1361,7 +1393,7 @@ def predict(req: PredictionRequest):
     elo_diff = float(X_1x2[0, 2])  # Posición 2 = elo_diff en feature_order
 
     # Llamar con blend dinámico
-    result_proba_new = model_manager_1x2.predict_1x2(league_id=req.league_id, features_40=X_1x2, elo_diff=elo_diff)
+    result_proba_new = model_manager_1x2.predict_1x2(league_id=req.league_id, features=X_1x2, elo_diff=elo_diff)
 
     # Convertir a porcentajes
     result_proba = {

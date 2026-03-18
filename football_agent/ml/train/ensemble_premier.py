@@ -1,5 +1,5 @@
-import os
-import sys
+# ensemble_premier.py
+import os, sys
 import numpy as np
 import pickle
 import json
@@ -8,11 +8,11 @@ from sklearn.metrics import accuracy_score, classification_report, log_loss
 from datetime import datetime
 from pathlib import Path
 
-# ✅ Añadir parent directory al path
+# ✅ Añadir paths
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../src"))
 
-# ✅ Importar desde train_1x2.py (mismo directorio)
+# ✅ Importar desde train_1x2.py
 from train_1x2 import (
     logger,
     Config,
@@ -20,7 +20,7 @@ from train_1x2 import (
     calculate_elo,
     calculate_form_features,
     calculate_h2h_features,
-    prepare_features  # ← Usaremos esta en vez de prepare_features_xgb
+    prepare_features  # ← DEBE estar aquí para usar las 47 features
 )
 
 from constants import MIN_PROB
@@ -296,8 +296,15 @@ def main():
     test_df = df[df['season'] == Config.TEST_SEASON].copy()
     logger.info(f"Test: {len(test_df)} partidos (season {Config.TEST_SEASON})")
 
-    # 4. ✅ Preparar features (usar función de train_1x2.py)
+    # 4. ✅ CRÍTICO: Usar prepare_features() de train_1x2.py con league_name
     X_test, y_test = prepare_features(test_df, league_name)
+
+    # Verificar número de features
+    logger.info(f"🔍 Features preparadas: {X_test.shape}")
+    if X_test.shape[1] != 47:
+        logger.error(f"❌ ERROR: Se obtuvieron {X_test.shape[1]} features, se esperaban 47")
+        return
+    logger.success(f"✅ X_test tiene 47 features")
 
     # 5. Cargar modelos
     try:
@@ -305,7 +312,7 @@ def main():
     except FileNotFoundError as e:
         logger.error(str(e))
         logger.error("\n❌ Para ejecutar ensemble, primero necesitas:")
-        logger.error("   1. Entrenar modelo XGBoost: python train_xgboost_premier.py")
+        logger.error("   1. Entrenar modelo XGBoost: python train_xgboost.py")
         logger.error("   2. Luego ejecutar este script")
         return
 
@@ -347,8 +354,9 @@ def main():
     logger.info(f"  - F1 Empates: {best_config['classification_report']['X (Draw)']['f1-score']:.3f}")
 
     # Mejora vs RF
-    acc_improvement = best_config['accuracy'] - rf_acc
-    recall_improvement = best_config['classification_report']['X (Draw)']['recall'] - rf_report['X']['recall']
+    acc_improvement = (best_config['accuracy'] - rf_acc) / max(rf_acc, 0.01)
+    recall_improvement = (best_config['classification_report']['X (Draw)']['recall'] - rf_report['X']['recall']) / max(
+        rf_report['X']['recall'], 0.01)
 
     logger.info(f"\nMejora vs RF solo:")
     logger.info(f"  - Accuracy: {acc_improvement:+.1%}")
@@ -357,7 +365,6 @@ def main():
     logger.info("\n" + "=" * 60)
     logger.success("ENSEMBLE COMPLETADO EXITOSAMENTE")
     logger.info("=" * 60)
-
 
 if __name__ == "__main__":
     main()

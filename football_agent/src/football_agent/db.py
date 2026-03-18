@@ -290,10 +290,10 @@ def get_league_matches(league_id: str, year: str) -> list[dict]:
     :param year: Año/temporada (ej: '24/25')
     :return: Lista de dicts con homeTeam, awayTeam, home_goals, away_goals
     """
-    print(f"[DB] 🔍 Ejecutando query para liga={league_id}, año={year}")  # 👈 Temporal
+    # print(f"[DB] 🔍 Ejecutando query para liga={league_id}, año={year}")  # 👈 Temporal
 
     sql = f"""
-        SELECT homeTeam, awayTeam,
+        SELECT homeTeam, awayTeam, Year,
                SUM(CASE WHEN name='Goals' AND period IN ('1ST','2ND') THEN CAST(homeValue AS DECIMAL) ELSE 0 END) AS home_goals,
                SUM(CASE WHEN name='Goals' AND period IN ('1ST','2ND') THEN CAST(awayValue AS DECIMAL) ELSE 0 END) AS away_goals
         FROM {TABLE}
