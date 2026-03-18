@@ -4,6 +4,42 @@ Constantes compartidas entre scripts de entrenamiento y predicción.
 Este archivo centraliza todas las configuraciones y parámetros del sistema
 para evitar duplicación y facilitar mantenimiento.
 """
+import os
+
+# ═══════════════════════════════════════════════════════════
+# CONFIGURACIÓN DE LIGAS - Para scripts genéricos
+# ═══════════════════════════════════════════════════════════
+
+LEAGUE_CONFIG = {
+    'laliga': {
+        'id': '8',
+        'name': 'LaLiga',
+        'slug': 'laliga',
+        'country': 'Spain'
+    },
+    'premier': {
+        'id': '17',
+        'name': 'Premier League',
+        'slug': 'premier_league',
+        'country': 'England'
+    },
+    'serie_a': {
+        'id': '23',
+        'name': 'Serie A',
+        'slug': 'serie_a',
+        'country': 'Italy'
+    }
+}
+
+# Temporadas para entrenamiento y test
+TRAIN_SEASONS = ['19/20', '20/21', '21/22', '22/23', '23/24', '24/25']
+TEST_SEASONS = ['25/26']
+
+# Umbrales Over/Under
+OVER_UNDER_THRESHOLDS = [0.5, 1.5, 2.5, 3.5]
+
+# Directorio base de modelos
+MODEL_BASE_DIR = os.path.dirname(os.path.abspath(__file__))  # /path/to/ml/
 
 # ═══════════════════════════════════════════════════════════
 # FEATURES - Stats utilizadas en modelos
@@ -91,3 +127,10 @@ TEST_SEASON = '25/26'       # Temporada actual para testing
 # MODELOS
 # ═══════════════════════════════════════════════════════════
 MODEL_1X2_PREMIER = "/Users/rodrigobenitogarcia/PycharmProjects/LaLiga_AIAgent/football_agent/ml/models/1x2/production/premier_league"
+
+# ═══════════════════════════════════════════════════════════
+# THRESHOLDS - Saves y Corners
+# ═══════════════════════════════════════════════════════════
+
+SAVES_THRESHOLDS = [0.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, 8.5]
+CORNERS_THRESHOLDS = [5.5, 6.5, 7.5, 8.5, 9.5, 10.5, 11.5, 12.5, 13.5, 14.5]

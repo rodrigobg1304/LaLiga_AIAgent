@@ -43,6 +43,14 @@ def run_query(sql: str, params: tuple = ()) -> list[dict]:
 # QUERIES POR CASO DE USO
 # ─────────────────────────────────────────────
 
+def get_name() -> list[str]:
+    """
+    Get list of the teams available.
+    :return: List of the teams
+    """
+    return [row["name"] for row in run_query(f"SELECT DISTINCT name FROM {TABLE} ORDER BY name ASC")]
+
+
 def get_teams() -> list[str]:
     """
     Get list of the teams available.
@@ -828,12 +836,110 @@ def get_matches_with_goals(league_id: str, years: list[str]) -> list[dict]:
 
     return run_query(sql, (league_id,))
 
+
+def get_matches_with_saves(league_id: str, years: list) -> list:
+    """
+    Obtiene partidos con paradas de porteros (Goalkeeper saves).
+
+    Args:
+        league_id: ID de la liga (ej: '8' para LaLiga)
+        years: Lista de temporadas ['19/20', '20/21', ...]
+
+    Returns:
+        list: Lista de dicts con matchId, Year, LeagueId,
+              homeTeam, awayTeam, home_goals, away_goals,
+              home_saves, away_saves
+    """
+    years_str = "', '".join(years)
+
+    sql = f"""
+    SELECT 
+        matchId,
+        homeTeam,
+        awayTeam,
+        LeagueId,
+        Year,
+
+        -- Goles (para contexto)
+        SUM(CASE WHEN name='Goals' AND period IN ('1ST','2ND') 
+            THEN CAST(homeValue AS DECIMAL) ELSE 0 END) AS home_goals,
+        SUM(CASE WHEN name='Goals' AND period IN ('1ST','2ND') 
+            THEN CAST(awayValue AS DECIMAL) ELSE 0 END) AS away_goals,
+
+        -- Paradas de portero (suma de 1ST + 2ND)
+        SUM(CASE WHEN name='Goalkeeper saves' AND period IN ('1ST','2ND') 
+            THEN CAST(homeValue AS DECIMAL) ELSE 0 END) AS home_saves,
+        SUM(CASE WHEN name='Goalkeeper saves' AND period IN ('1ST','2ND') 
+            THEN CAST(awayValue AS DECIMAL) ELSE 0 END) AS away_saves
+
+    FROM {TABLE}
+    WHERE LeagueId = %s
+      AND Year IN ('{years_str}')
+      AND name IN ('Goals', 'Goalkeeper saves')
+    GROUP BY matchId, homeTeam, awayTeam, LeagueId, Year
+    HAVING home_saves IS NOT NULL 
+       AND away_saves IS NOT NULL
+    ORDER BY Year ASC, CAST(Round AS SIGNED) ASC
+    """
+
+    return run_query(sql, (league_id,))
+
+
+def get_matches_with_corners(league_id: str, years: list) -> list:
+    """
+    Obtiene partidos con córners (Corner kicks).
+
+    Args:
+        league_id: ID de la liga
+        years: Lista de temporadas
+
+    Returns:
+        list: Lista de dicts con matchId, Year, LeagueId,
+              homeTeam, awayTeam, home_goals, away_goals,
+              home_corners, away_corners
+    """
+    years_str = "', '".join(years)
+
+    sql = f"""
+    SELECT 
+        matchId,
+        homeTeam,
+        awayTeam,
+        LeagueId,
+        Year,
+
+        -- Goles (para contexto)
+        SUM(CASE WHEN name='Goals' AND period IN ('1ST','2ND') 
+            THEN CAST(homeValue AS DECIMAL) ELSE 0 END) AS home_goals,
+        SUM(CASE WHEN name='Goals' AND period IN ('1ST','2ND') 
+            THEN CAST(awayValue AS DECIMAL) ELSE 0 END) AS away_goals,
+
+        -- Córners (suma de 1ST + 2ND)
+        SUM(CASE WHEN name='Corner kicks' AND period IN ('1ST','2ND') 
+            THEN CAST(homeValue AS DECIMAL) ELSE 0 END) AS home_corners,
+        SUM(CASE WHEN name='Corner kicks' AND period IN ('1ST','2ND') 
+            THEN CAST(awayValue AS DECIMAL) ELSE 0 END) AS away_corners
+
+    FROM {TABLE}
+    WHERE LeagueId = %s
+      AND Year IN ('{years_str}')
+      AND name IN ('Goals', 'Corner kicks')
+    GROUP BY matchId, homeTeam, awayTeam, LeagueId, Year
+    HAVING home_corners IS NOT NULL 
+       AND away_corners IS NOT NULL
+    ORDER BY Year ASC, CAST(Round AS SIGNED) ASC
+    """
+
+    return run_query(sql, (league_id,))
+
+
 if __name__ == '__main__':
-    team_test = "real-betis"
-    matches_test = 5
-    team_result = get_team_results(team=team_test, year="25/26", top_n=matches_test)
-    print(team_result)
-    goals_result = get_goals_scored(team=team_test)
-    print(goals_result)
-    import pandas as pd
-    print(pd.DataFrame(goals_result))
+    # team_test = "real-betis"
+    # matches_test = 5
+    # team_result = get_team_results(team=team_test, year="25/26", top_n=matches_test)
+    # print(team_result)
+    # goals_result = get_goals_scored(team=team_test)
+    # print(goals_result)
+    # import pandas as pd
+    # print(pd.DataFrame(goals_result))
+    print(get_name())

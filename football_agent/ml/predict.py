@@ -31,7 +31,9 @@ from constants import (
     MIN_PROB,
     FORM_WINDOW,
     H2H_LOOKBACK,
-    MIN_H2H_MATCHES
+    MIN_H2H_MATCHES,
+    LEAGUE_NAMES_NORMALIZED,
+    LEAGUES
 )
 
 
@@ -46,6 +48,8 @@ MODEL_1X2_SERIEA = os.path.join(MODEL_1X2, "serie_a")
 
 MODEL_OVER_UNDER_GOALS = os.path.join(MODELS_DIR, "over_under", "goals", "production")
 MODEL_OVER_UNDER_GOALS_LALIGA = os.path.join(MODEL_OVER_UNDER_GOALS, "laliga")
+MODEL_OVER_UNDER_GOALS_PREMIER = os.path.join(MODEL_OVER_UNDER_GOALS, "premier_league")
+MODEL_OVER_UNDER_GOALS_SERIEA = os.path.join(MODEL_OVER_UNDER_GOALS, "serie_a")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # MODEL MANAGER PARA 1X2 (RF + ENSEMBLE)
@@ -219,7 +223,7 @@ class ModelManager1X2:
         }
 
 
-class ModelManagerOverUnder:
+class ModelManagerOverUnderGoals:
     """Gestiona la carga de modelos Over/Under (0.5, 1.5, 2.5, 3.5)"""
 
     def __init__(self):
@@ -238,11 +242,19 @@ class ModelManagerOverUnder:
             "23": "serie_a"
         }.get(league_id, "laliga")
 
+        league_dir_map = {
+            "8": MODEL_OVER_UNDER_GOALS_LALIGA,
+            "17": MODEL_OVER_UNDER_GOALS_PREMIER,
+            "23": MODEL_OVER_UNDER_GOALS_SERIEA
+        }
+
+        league_dir = league_dir_map.get(league_id, MODEL_OVER_UNDER_GOALS_LALIGA)
+
         self.league_models[league_id] = {}
 
         for threshold in self.thresholds:
             threshold_str = str(threshold).replace(".", "_")
-            model_path = os.path.join(MODEL_OVER_UNDER_GOALS_LALIGA, f"model_over_{threshold_str}_{league_name}.pkl")
+            model_path = os.path.join(league_dir, f"model_over_{threshold_str}_{league_name}.pkl")
 
             if not os.path.exists(model_path):
                 print(f"⚠️  Modelo Over/Under {threshold} no encontrado para {league_name}")
@@ -264,7 +276,7 @@ class ModelManagerOverUnder:
     def load_all_models(self):
         """Precarga modelos de todas las ligas disponibles"""
         print("🔄 Cargando modelos Over/Under...")
-        for league_id in ["8"]:  # Solo LaLiga por ahora
+        for league_id in ["8", "17", "23"]:
             print(f"  Liga {league_id}:")
             self.load_models(league_id)
         print("✅ Modelos Over/Under cargados")
@@ -277,6 +289,9 @@ class ModelManagerOverUnder:
         # Reutilizar features de 1X2
         features = build_features_1x2(home_team, away_team, year, league_id)
 
+        if features.shape[1] > 40:
+            features = features[:, :40]
+
         if features.ndim == 3:
             features = features.reshape(1, -1)
         elif features.ndim == 1:
@@ -286,7 +301,7 @@ class ModelManagerOverUnder:
         probs_over = []
 
         for threshold in self.thresholds:
-            model = model_manager_ou.get_model(league_id, threshold)
+            model = model_manager_ou_goals.get_model(league_id, threshold)
 
             if model is None:
                 # Si no hay modelo, usar heurística simple
@@ -315,10 +330,314 @@ class ModelManagerOverUnder:
         return result
 
 
+class ModelManagerSaves:
+    """
+    Gestor de modelos Over/Under para SAVES (paradas de portero).
+    Arquitectura: 9 modelos RF por liga con feature is_home.
+    """
+
+    def __init__(self, league_id: str = "8"):
+        """
+        Inicializa el gestor de modelos de saves para una liga.
+
+        Args:
+            league_id: ID de la liga ('8', '17', '23')
+        """
+        self.league_id = league_id
+        self.league_name = LEAGUE_NAMES_NORMALIZED.get(LEAGUES.get(league_id, ''), 'unknown')
+
+        # Thresholds disponibles
+        self.thresholds = [0.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, 8.5]
+
+        # Directorio de modelos
+        self.models_dir = os.path.join(
+            MODELS_DIR,
+            "over_under",
+            "saves",
+            "production",
+            self.league_name
+        )
+
+        # Cache de modelos cargados
+        self.models = {}
+
+        print(f"📊 ModelManagerSaves inicializado para {LEAGUES.get(league_id, 'unknown')}")
+        self._load_models()
+
+    def _load_models(self):
+        """Carga todos los modelos de saves de la liga."""
+        for threshold in self.thresholds:
+            threshold_str = str(threshold).replace('.', '_')
+            model_filename = f"model_over_{threshold_str}_saves_{self.league_name}.pkl"
+            model_path = os.path.join(self.models_dir, model_filename)
+
+            if os.path.exists(model_path):
+                try:
+                    with open(model_path, 'rb') as f:
+                        self.models[threshold] = pickle.load(f)
+                    print(f"  ✅ Modelo Over {threshold} saves cargado")
+                except Exception as e:
+                    print(f"  ❌ Error cargando modelo Over {threshold} saves: {str(e)}")
+            else:
+                print(f"  ⚠️ Modelo Over {threshold} saves no encontrado: {model_path}")
+
+    def predict(self, features: np.ndarray, is_home: int) -> dict:
+        """
+        Predice probabilidades Over/Under saves para un equipo.
+
+        Args:
+            features: Array de features (40 o 47 según liga)
+            is_home: 1 si es portero local, 0 si visitante
+
+        Returns:
+            dict: {
+                'over_0_5': 0.95,
+                'over_1_5': 0.78,
+                ...
+                'over_8_5': 0.02
+            }
+        """
+        if not self.models:
+            print("❌ No hay modelos cargados para saves")
+            return {}
+
+        # Añadir feature is_home a las features base
+        features_with_context = np.append(features.flatten(), [is_home]).reshape(1, -1)
+
+        probabilities = {}
+
+        for threshold in self.thresholds:
+            if threshold not in self.models:
+                continue
+
+            try:
+                model = self.models[threshold]
+                # Probabilidad de over (clase 1)
+                prob_over = model.predict_proba(features_with_context)[0, 1]
+
+                # Aplicar MIN_PROB floor
+                prob_over = max(prob_over, MIN_PROB)
+
+                # Guardar
+                threshold_key = f"over_{str(threshold).replace('.', '_')}"
+                probabilities[threshold_key] = float(prob_over)
+
+            except Exception as e:
+                print(f"❌ Error prediciendo saves threshold {threshold}: {str(e)}")
+                continue
+
+        # Enforce monotonicity: P(>0.5) >= P(>1.5) >= ... >= P(>8.5)
+        probabilities = self._enforce_monotonicity(probabilities)
+
+        return probabilities
+
+    def _enforce_monotonicity(self, probs: dict) -> dict:
+        """
+        Asegura que P(>0.5) >= P(>1.5) >= ... >= P(>8.5).
+
+        Args:
+            probs: Dict con probabilidades originales
+
+        Returns:
+            dict: Probabilidades corregidas
+        """
+        # Ordenar thresholds de menor a mayor
+        sorted_thresholds = sorted(self.thresholds)
+
+        # Extraer valores en orden
+        values = []
+        for t in sorted_thresholds:
+            key = f"over_{str(t).replace('.', '_')}"
+            if key in probs:
+                values.append(probs[key])
+
+        # Aplicar maximum accumulate (backwards)
+        # P(>8.5) queda igual, P(>7.5) = max(P(>7.5), P(>8.5)), etc.
+        corrected = np.maximum.accumulate(values[::-1])[::-1]
+
+        # Reconstruir dict
+        corrected_probs = {}
+        for i, t in enumerate(sorted_thresholds):
+            key = f"over_{str(t).replace('.', '_')}"
+            if key in probs:
+                corrected_probs[key] = float(corrected[i])
+
+        return corrected_probs
+
+    def predict_match(self, features: np.ndarray) -> dict:
+        """
+        Predice saves para ambos porteros (home y away).
+
+        Args:
+            features: Features base del partido (40 o 47)
+
+        Returns:
+            dict: {
+                'home': {'over_0_5': 0.95, 'over_1_5': 0.78, ...},
+                'away': {'over_0_5': 0.97, 'over_1_5': 0.82, ...}
+            }
+        """
+        return {
+            'home': self.predict(features, is_home=1),
+            'away': self.predict(features, is_home=0)
+        }
+
+
+class ModelManagerCorners:
+    """
+    Gestor de modelos Over/Under para CORNERS (córners).
+    Arquitectura: 10 modelos RF por liga con feature is_home.
+    """
+
+    def __init__(self, league_id: str = "8"):
+        """
+        Inicializa el gestor de modelos de corners para una liga.
+
+        Args:
+            league_id: ID de la liga ('8', '17', '23')
+        """
+        self.league_id = league_id
+        self.league_name = LEAGUE_NAMES_NORMALIZED.get(LEAGUES.get(league_id, ''), 'unknown')
+
+        # Thresholds disponibles
+        self.thresholds = [5.5, 6.5, 7.5, 8.5, 9.5, 10.5, 11.5, 12.5, 13.5, 14.5]
+
+        # Directorio de modelos
+        self.models_dir = os.path.join(
+            MODELS_DIR,
+            "over_under",
+            "corners",
+            "production",
+            self.league_name
+        )
+
+        # Cache de modelos cargados
+        self.models = {}
+
+        print(f"⚽ ModelManagerCorners inicializado para {LEAGUES.get(league_id, 'unknown')}")
+        self._load_models()
+
+    def _load_models(self):
+        """Carga todos los modelos de corners de la liga."""
+        for threshold in self.thresholds:
+            threshold_str = str(threshold).replace('.', '_')
+            model_filename = f"model_over_{threshold_str}_corners_{self.league_name}.pkl"
+            model_path = os.path.join(self.models_dir, model_filename)
+
+            if os.path.exists(model_path):
+                try:
+                    with open(model_path, 'rb') as f:
+                        self.models[threshold] = pickle.load(f)
+                    print(f"  ✅ Modelo Over {threshold} corners cargado")
+                except Exception as e:
+                    print(f"  ❌ Error cargando modelo Over {threshold} corners: {str(e)}")
+            else:
+                print(f"  ⚠️ Modelo Over {threshold} corners no encontrado: {model_path}")
+
+    def predict(self, features: np.ndarray, is_home: int) -> dict:
+        """
+        Predice probabilidades Over/Under corners para un equipo.
+
+        Args:
+            features: Array de features (40 o 47 según liga)
+            is_home: 1 si es equipo local, 0 si visitante
+
+        Returns:
+            dict: {
+                'over_5_5': 0.42,
+                'over_6_5': 0.31,
+                ...
+                'over_14_5': 0.01
+            }
+        """
+        if not self.models:
+            print("❌ No hay modelos cargados para corners")
+            return {}
+
+        # Añadir feature is_home a las features base
+        features_with_context = np.append(features.flatten(), [is_home]).reshape(1, -1)
+
+        probabilities = {}
+
+        for threshold in self.thresholds:
+            if threshold not in self.models:
+                continue
+
+            try:
+                model = self.models[threshold]
+                # Probabilidad de over (clase 1)
+                prob_over = model.predict_proba(features_with_context)[0, 1]
+
+                # Aplicar MIN_PROB floor
+                prob_over = max(prob_over, MIN_PROB)
+
+                # Guardar
+                threshold_key = f"over_{str(threshold).replace('.', '_')}"
+                probabilities[threshold_key] = float(prob_over)
+
+            except Exception as e:
+                print(f"❌ Error prediciendo corners threshold {threshold}: {str(e)}")
+                continue
+
+        # Enforce monotonicity: P(>5.5) >= P(>6.5) >= ... >= P(>14.5)
+        probabilities = self._enforce_monotonicity(probabilities)
+
+        return probabilities
+
+    def _enforce_monotonicity(self, probs: dict) -> dict:
+        """
+        Asegura que P(>5.5) >= P(>6.5) >= ... >= P(>14.5).
+
+        Args:
+            probs: Dict con probabilidades originales
+
+        Returns:
+            dict: Probabilidades corregidas
+        """
+        # Ordenar thresholds de menor a mayor
+        sorted_thresholds = sorted(self.thresholds)
+
+        # Extraer valores en orden
+        values = []
+        for t in sorted_thresholds:
+            key = f"over_{str(t).replace('.', '_')}"
+            if key in probs:
+                values.append(probs[key])
+
+        # Aplicar maximum accumulate (backwards)
+        corrected = np.maximum.accumulate(values[::-1])[::-1]
+
+        # Reconstruir dict
+        corrected_probs = {}
+        for i, t in enumerate(sorted_thresholds):
+            key = f"over_{str(t).replace('.', '_')}"
+            if key in probs:
+                corrected_probs[key] = float(corrected[i])
+
+        return corrected_probs
+
+    def predict_match(self, features: np.ndarray) -> dict:
+        """
+        Predice corners para ambos equipos (home y away).
+
+        Args:
+            features: Features base del partido (40 o 47)
+
+        Returns:
+            dict: {
+                'home': {'over_5_5': 0.42, 'over_6_5': 0.31, ...},
+                'away': {'over_5_5': 0.38, 'over_6_5': 0.27, ...}
+            }
+        """
+        return {
+            'home': self.predict(features, is_home=1),
+            'away': self.predict(features, is_home=0)
+        }
+
+
 # Instancia global
 model_manager_1x2 = ModelManager1X2()
-model_manager_ou = ModelManagerOverUnder()
-
+model_manager_ou_goals = ModelManagerOverUnderGoals()
 
 # ══════════════════════════════════════════════════════════════════════════════
 # BAYESIAN BLEND: ELO → PROBABILIDADES 1X2
@@ -388,14 +707,6 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"⚠️  Error precargando Elo: {e}")
 
-    # # ── TUS MODELOS EXISTENTES (over/under) ──
-    # print("🚀 Precargando modelos over/under...")
-    # for league_id in ["8", "17", "23"]:
-    #     try:
-    #         load_models(league_id)  # Tu función existente
-    #     except Exception as e:
-    #         print(f"⚠️  No se pudo precargar modelo {league_id}: {e}")
-
     # ── NUEVOS MODELOS 1X2 ──
     print("🚀 Precargando modelos 1X2 (RF + Ensemble)...")
     try:
@@ -403,10 +714,10 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"⚠️  Error cargando modelos 1X2: {e}")
 
-    # ── MODELOS OVER/UNDER ── ← AÑADIR ESTO
+    # ── MODELOS OVER/UNDER ──
     print("🚀 Precargando modelos Over/Under...")
     try:
-        model_manager_ou.load_all_models()
+        model_manager_ou_goals.load_all_models()
     except Exception as e:
         print(f"⚠️  Error cargando modelos Over/Under: {e}")
 
@@ -424,21 +735,6 @@ LEAGUE_MODEL_MAP = {
     "23": "seriea"
 }
 
-# ══════════════════════════════════════════════════════════════════════════════
-# PARÁMETROS ELO (DEBEN COINCIDIR CON train.py)
-# ══════════════════════════════════════════════════════════════════════════════
-ELO_K = 32  # Factor K (velocidad de ajuste)
-ELO_SCALE = 600  # Escala (400=ajedrez, 600=fútbol)
-ELO_HOME_ADVANTAGE = 100  # Ventaja de jugar en casa
-
-# ══════════════════════════════════════════════════════════════════════════════
-# PARÁMETROS DE PONDERACIÓN (DEBEN COINCIDIR CON train.py)
-# ══════════════════════════════════════════════════════════════════════════════
-RECENT_WEIGHT = 0.65  # Peso de forma reciente (últimos N partidos)
-HISTORICAL_WEIGHT = 0.35  # Peso de histórico completo
-WIN_RATE_RECENT_WEIGHT = 0.35  # Peso reciente para win rates
-WIN_RATE_HISTORICAL_WEIGHT = 0.65  # Peso histórico para win rates (invertido)
-
 # ─────────────────────────────────────────────
 # CACHÉ GLOBAL DE MODELOS (en memoria)
 # ─────────────────────────────────────────────
@@ -446,6 +742,8 @@ WIN_RATE_HISTORICAL_WEIGHT = 0.65  # Peso histórico para win rates (invertido)
 _models_cache: dict = {}
 _models_mtime: dict = {}
 _models_lock = threading.Lock()
+_saves_managers: dict = {}
+_corners_managers: dict = {}
 
 
 def load_models(league_id: str) -> tuple:
@@ -1386,6 +1684,12 @@ def predict(req: PredictionRequest):
         raise HTTPException(status_code=500, detail=f"Error construyendo features: {e}")
 
     # ══════════════════════════════════════════════════════════════════════════
+    # ✅ EXTRAER SOLO LAS 40 FEATURES BASE (para saves/corners)
+    # ══════════════════════════════════════════════════════════════════════════
+    # Premier tiene 47 features, pero saves/corners solo necesitan las primeras 40
+    X_base_40 = X_1x2[:, :40]  # Tomar solo las primeras 40 columnas
+
+    # ══════════════════════════════════════════════════════════════════════════
     # PREDICCIÓN 1X2 CON NUEVOS MODELOS (RF o Ensemble según liga)
     # ══════════════════════════════════════════════════════════════════════════
 
@@ -1412,10 +1716,30 @@ def predict(req: PredictionRequest):
     odds = calculate_odds(result_proba, margin=0.07)
 
     # ══════════════════════════════════════════════════════════════════════════
-    # OVER/UNDER (tu código existente - NO CAMBIAR)
+    # OVER/UNDER GOALS
     # ══════════════════════════════════════════════════════════════════════════
-    result_proba_ou = model_manager_ou.predict_over_under(home_team=req.home_team, away_team=req.away_team,
-                                                          year=req.year, league_id=req.league_id)
+    result_proba_ou = model_manager_ou_goals.predict_over_under(home_team=req.home_team, away_team=req.away_team,
+                                                                year=req.year, league_id=req.league_id)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SAVES (PARADAS DE PORTERO)
+    # ══════════════════════════════════════════════════════════════════════════
+    try:
+        saves_manager = ModelManagerSaves(league_id=req.league_id)
+        saves_predictions = saves_manager.predict_match(X_base_40)
+    except Exception as e:
+        print(f"⚠️ Error prediciendo saves: {e}")
+        saves_predictions = {"home": {}, "away": {}}
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # CORNERS (CÓRNERS)
+    # ══════════════════════════════════════════════════════════════════════════
+    try:
+        corners_manager = ModelManagerCorners(league_id=req.league_id)
+        corners_predictions = corners_manager.predict_match(X_base_40)
+    except Exception as e:
+        print(f"⚠️ Error prediciendo corners: {e}")
+        corners_predictions = {"home": {}, "away": {}}
 
     # ══════════════════════════════════════════════════════════════════════════
     # RESPONSE (añadir info de modelo usado)
@@ -1436,8 +1760,9 @@ def predict(req: PredictionRequest):
             "confidence": confidence,
             "blend_info": result_proba_new.get('_debug', {}),
         },
-        "over_under_goals": result_proba_ou
-        # "over_under": over_under,
+        "over_under_goals": result_proba_ou,
+        "saves": saves_predictions,
+        "corners": corners_predictions
     }
 
 

@@ -1,46 +1,46 @@
 {
   "over_0_5": {
     "threshold": 0.5,
-    "test_accuracy": 0.9555555555555556,
-    "test_auc": 0.6677971576227391,
-    "test_f1": 0.9772727272727273,
-    "test_precision": 0.9555555555555556,
+    "test_accuracy": 0.9571428571428572,
+    "test_auc": 0.7217039800995025,
+    "test_f1": 0.9781021897810219,
+    "test_precision": 0.9571428571428572,
     "test_recall": 1.0,
     "positive_rate_train": 0.9192982456140351,
-    "positive_rate_test": 0.9555555555555556,
-    "trained_at": "2026-03-10T15:14:13.572633"
+    "positive_rate_test": 0.9571428571428572,
+    "trained_at": "2026-03-18T11:56:42.416598"
   },
   "over_1_5": {
     "threshold": 1.5,
-    "test_accuracy": 0.8148148148148148,
-    "test_auc": 0.7769943257676902,
-    "test_f1": 0.8940677966101694,
-    "test_precision": 0.8178294573643411,
-    "test_recall": 0.985981308411215,
+    "test_accuracy": 0.8035714285714286,
+    "test_auc": 0.7787356321839081,
+    "test_f1": 0.8879837067209776,
+    "test_precision": 0.8104089219330854,
+    "test_recall": 0.9819819819819819,
     "positive_rate_train": 0.7162280701754385,
-    "positive_rate_test": 0.7925925925925926,
-    "trained_at": "2026-03-10T15:14:19.023875"
+    "positive_rate_test": 0.7928571428571428,
+    "trained_at": "2026-03-18T11:56:47.009583"
   },
   "over_2_5": {
     "threshold": 2.5,
-    "test_accuracy": 0.6592592592592592,
-    "test_auc": 0.738888279192274,
-    "test_f1": 0.6349206349206349,
-    "test_precision": 0.6896551724137931,
-    "test_recall": 0.5882352941176471,
+    "test_accuracy": 0.6535714285714286,
+    "test_auc": 0.7405224756365121,
+    "test_f1": 0.6283524904214559,
+    "test_precision": 0.6833333333333333,
+    "test_recall": 0.5815602836879432,
     "positive_rate_train": 0.4605263157894737,
-    "positive_rate_test": 0.5037037037037037,
-    "trained_at": "2026-03-10T15:14:23.994194"
+    "positive_rate_test": 0.5035714285714286,
+    "trained_at": "2026-03-18T11:56:48.656760"
   },
   "over_3_5": {
     "threshold": 3.5,
-    "test_accuracy": 0.7333333333333333,
-    "test_auc": 0.7078015718508904,
-    "test_f1": 0.2,
-    "test_precision": 0.42857142857142855,
-    "test_recall": 0.13043478260869565,
+    "test_accuracy": 0.7571428571428571,
+    "test_auc": 0.7239583333333334,
+    "test_f1": 0.2916666666666667,
+    "test_precision": 0.5833333333333334,
+    "test_recall": 0.19444444444444445,
     "positive_rate_train": 0.2442982456140351,
-    "positive_rate_test": 0.25555555555555554,
-    "trained_at": "2026-03-10T15:14:25.623436"
+    "positive_rate_test": 0.2571428571428571,
+    "trained_at": "2026-03-18T11:56:53.390568"
   }
 }

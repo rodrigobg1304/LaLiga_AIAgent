@@ -1,53 +1,63 @@
 """
-Script de entrenamiento para modelos Over/Under (0.5, 1.5, 2.5, 3.5)
+Script de entrenamiento GENÉRICO para modelos Over/Under (0.5, 1.5, 2.5, 3.5)
 Arquitectura: 4 Random Forest independientes con calibración isotónica
+Soporta múltiples ligas mediante argumentos CLI
 """
 
 import sys
 import os
 from pathlib import Path
+import argparse
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.calibration import CalibratedClassifierCV
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score, classification_report, roc_auc_score
+from sklearn.metrics import accuracy_score, roc_auc_score, precision_recall_fscore_support
 import pickle
 import json
 from datetime import datetime
+from tqdm import tqdm
 
-# Añadir path para imports
+# Añadir paths para imports
 sys.path.append(os.path.join(os.path.dirname(__file__), "../../src"))
-from football_agent.db import (run_query, get_matches_with_goals)
+from football_agent.db import get_matches_with_goals
 
-# Importar función de features desde predict.py
 sys.path.append(os.path.join(os.path.dirname(__file__), "../"))
 from predict import build_features_1x2
+from constants import (
+    LEAGUE_CONFIG,
+    TRAIN_SEASONS,
+    TEST_SEASONS,
+    OVER_UNDER_THRESHOLDS,
+    MODEL_BASE_DIR
+)
+
 
 # ═══════════════════════════════════════════════════════════
-# CONFIGURACIÓN
+# CLI ARGUMENTS
 # ═══════════════════════════════════════════════════════════
 
-LEAGUE_ID = "8"  # LaLiga
-YEARS_TRAIN = ['19/20', '20/21', '21/22', '22/23', '23/24', '24/25']  # Últimas 5 temporadas
-YEARS_TEST = ['25/26']  # Temporada actual para validación
-
-#OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "../models")
-OUTPUT_DIR_LALIGA = Path(__file__).parent.parent / "models" / "over_under" / "goals" / "production" / "laliga"
-
-# OUTPUT_DIR_LALIGA = os.path.join(OUTPUT_DIR, "over_under", "goals", "production", "laliga")
-OUTPUT_DIR_LALIGA.mkdir(parents=True, exist_ok=True)
-
-THRESHOLDS = [0.5, 1.5, 2.5, 3.5]
+def parse_args():
+    """Parser de argumentos de línea de comandos."""
+    parser = argparse.ArgumentParser(
+        description='Entrenar modelos Over/Under para una o más ligas'
+    )
+    parser.add_argument(
+        '--leagues',
+        nargs='+',
+        choices=['laliga', 'premier', 'serie_a', 'all'],
+        default=['all'],
+        help='Ligas a entrenar (default: all). Ejemplos: --leagues laliga premier'
+    )
+    return parser.parse_args()
 
 
 # ═══════════════════════════════════════════════════════════
 # FUNCIONES AUXILIARES
 # ═══════════════════════════════════════════════════════════
+
 def get_all_matches(league_id: str, years: list) -> pd.DataFrame:
     """Obtiene todos los partidos con goles totales."""
-
-    # ✅ Solo llamada a db.py
     rows = get_matches_with_goals(league_id, years)
     df = pd.DataFrame(rows)
 
@@ -58,7 +68,7 @@ def get_all_matches(league_id: str, years: list) -> pd.DataFrame:
     df['total_goals'] = df['home_goals'] + df['away_goals']
 
     # Crear targets binarios para cada umbral
-    for threshold in THRESHOLDS:
+    for threshold in OVER_UNDER_THRESHOLDS:
         col_name = f'over_{str(threshold).replace(".", "_")}'
         df[col_name] = (df['total_goals'] > threshold).astype(int)
 
@@ -80,15 +90,12 @@ def build_features_for_match(row: pd.Series) -> np.ndarray:
         )
         return features
     except Exception:
-        # Silenciar errores individuales
         return None
 
 
 def prepare_dataset(df: pd.DataFrame) -> tuple:
     """Prepara X (features) e y (targets) para entrenamiento."""
     print(f"\n🔄 Construyendo features para {len(df)} partidos...")
-
-    from tqdm import tqdm  # Barra de progreso
 
     X_list = []
     valid_indices = []
@@ -101,7 +108,7 @@ def prepare_dataset(df: pd.DataFrame) -> tuple:
 
     X = np.vstack(X_list)
     if X.ndim == 3:
-        X = X.reshape(X.shape[0], -1)  # (n_samples, 1, 40) -> (n_samples, 40)
+        X = X.reshape(X.shape[0], -1)
 
     df_valid = df.loc[valid_indices].reset_index(drop=True)
 
@@ -122,7 +129,7 @@ def train_model_for_threshold(X_train, y_train, X_test, y_test, threshold: float
     else:
         class_weight = None
 
-    # Entrenar Random Forest (sin prints)
+    # Entrenar Random Forest
     rf = RandomForestClassifier(
         n_estimators=100,
         max_depth=10,
@@ -131,11 +138,11 @@ def train_model_for_threshold(X_train, y_train, X_test, y_test, threshold: float
         class_weight=class_weight,
         random_state=42,
         n_jobs=-1,
-        verbose=0  # ← Silenciar
+        verbose=0
     )
     rf.fit(X_train, y_train)
 
-    # Calibración (sin prints)
+    # Calibración isotónica
     calibrated = CalibratedClassifierCV(
         rf,
         method='isotonic',
@@ -151,8 +158,6 @@ def train_model_for_threshold(X_train, y_train, X_test, y_test, threshold: float
     test_acc = accuracy_score(y_test, y_pred_test)
     test_auc = roc_auc_score(y_test, y_proba_test)
 
-    # Solo métricas clave
-    from sklearn.metrics import precision_recall_fscore_support
     precision, recall, f1, _ = precision_recall_fscore_support(
         y_test, y_pred_test, average='binary', zero_division=0
     )
@@ -176,24 +181,35 @@ def train_model_for_threshold(X_train, y_train, X_test, y_test, threshold: float
 
 
 # ═══════════════════════════════════════════════════════════
-# ENTRENAMIENTO PRINCIPAL
+# ENTRENAMIENTO POR LIGA
 # ═══════════════════════════════════════════════════════════
 
-def main():
+def train_league(league_key: str):
+    """Entrena modelos Over/Under para una liga específica."""
+
+    league_config = LEAGUE_CONFIG[league_key]
+    league_id = league_config['id']
+    league_slug = league_config['slug']
+    league_name = league_config['name']
+
+    print("\n" + "=" * 60)
+    print(f"🚀 ENTRENAMIENTO OVER/UNDER - {league_name}")
     print("=" * 60)
-    print("🚀 ENTRENAMIENTO MODELOS OVER/UNDER")
-    print("=" * 60)
-    print(f"Liga: {LEAGUE_ID}")
-    print(f"Train: {YEARS_TRAIN}")
-    print(f"Test:  {YEARS_TEST}")
-    print(f"Umbrales: {THRESHOLDS}")
+    print(f"Liga ID: {league_id}")
+    print(f"Train: {TRAIN_SEASONS}")
+    print(f"Test:  {TEST_SEASONS}")
+    print(f"Umbrales: {OVER_UNDER_THRESHOLDS}")
+
+    # Directorio de salida
+    output_dir = Path(MODEL_BASE_DIR) / "models" / "over_under" / "goals" / "production" / league_slug
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     # 1. Cargar datos
     print("\n📥 Cargando datos de entrenamiento...")
-    df_train = get_all_matches(LEAGUE_ID, YEARS_TRAIN)
+    df_train = get_all_matches(league_id, TRAIN_SEASONS)
 
     print("\n📥 Cargando datos de test...")
-    df_test = get_all_matches(LEAGUE_ID, YEARS_TEST)
+    df_test = get_all_matches(league_id, TEST_SEASONS)
 
     # 2. Construir features
     X_train, df_train_valid = prepare_dataset(df_train)
@@ -202,7 +218,7 @@ def main():
     # 3. Entrenar un modelo por cada umbral
     all_metrics = {}
 
-    for threshold in THRESHOLDS:
+    for threshold in OVER_UNDER_THRESHOLDS:
         col_name = f'over_{str(threshold).replace(".", "_")}'
 
         y_train = df_train_valid[col_name].values
@@ -216,8 +232,8 @@ def main():
         )
 
         # Guardar modelo
-        model_filename = f"model_{col_name}_laliga.pkl"
-        model_path = os.path.join(OUTPUT_DIR_LALIGA, model_filename)
+        model_filename = f"model_{col_name}_{league_slug}.pkl"
+        model_path = output_dir / model_filename
 
         with open(model_path, 'wb') as f:
             pickle.dump(model, f)
@@ -227,21 +243,54 @@ def main():
         all_metrics[col_name] = metrics
 
     # 4. Guardar métricas
-    metrics_path = os.path.join(OUTPUT_DIR_LALIGA, "metrics_over_under_laliga.json")
+    metrics_path = output_dir / f"metrics_over_under_{league_slug}.json"
     with open(metrics_path, 'w') as f:
         json.dump(all_metrics, f, indent=2)
 
     print(f"\n💾 Métricas guardadas: {metrics_path}")
 
-    # 5. Resumen final
+    # 5. Resumen
     print("\n" + "=" * 60)
-    print("✅ ENTRENAMIENTO COMPLETADO")
+    print(f"✅ {league_name} - ENTRENAMIENTO COMPLETADO")
     print("=" * 60)
     print("\nResumen de modelos:")
-    for threshold in THRESHOLDS:
+    for threshold in OVER_UNDER_THRESHOLDS:
         col_name = f'over_{str(threshold).replace(".", "_")}'
         m = all_metrics[col_name]
         print(f"  Over {threshold}: Test Acc={m['test_accuracy']:.3f} | AUC={m['test_auc']:.3f}")
+
+
+# ═══════════════════════════════════════════════════════════
+# MAIN
+# ═══════════════════════════════════════════════════════════
+
+def main():
+    """Función principal con manejo de múltiples ligas."""
+    args = parse_args()
+
+    # Determinar qué ligas entrenar
+    if 'all' in args.leagues:
+        leagues_to_train = list(LEAGUE_CONFIG.keys())
+    else:
+        leagues_to_train = args.leagues
+
+    print("\n" + "=" * 60)
+    print("🎯 ENTRENAMIENTO OVER/UNDER - SCRIPT GENÉRICO")
+    print("=" * 60)
+    print(f"Ligas seleccionadas: {', '.join([LEAGUE_CONFIG[k]['name'] for k in leagues_to_train])}")
+
+    # Entrenar cada liga
+    for league_key in leagues_to_train:
+        try:
+            train_league(league_key)
+        except Exception as e:
+            print(f"\n❌ ERROR en {LEAGUE_CONFIG[league_key]['name']}: {str(e)}")
+            continue
+
+    # Resumen final
+    print("\n" + "=" * 60)
+    print("✅ TODOS LOS ENTRENAMIENTOS COMPLETADOS")
+    print("=" * 60)
 
 
 if __name__ == "__main__":
