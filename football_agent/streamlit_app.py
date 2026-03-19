@@ -66,73 +66,116 @@ st.markdown("""
 
     * { font-family: 'DM Sans', sans-serif; }
 
-    .main { background-color: #f8f9fa; }
-
-    .stApp { background-color: #f8f9fa; }
+    /* ════════════════════════════════════════════════════════════════════ */
+    /* TONOS CÁLIDOS - FONDO PRINCIPAL */
+    /* ════════════════════════════════════════════════════════════════════ */
+    .main { background-color: #FDF6E3; }  /* Crema cálido */
+    .stApp { background-color: #FDF6E3; }
 
     /* Sidebar */
     [data-testid="stSidebar"] {
-        background-color: #0a0a0a;
-        border-right: 1px solid #1a1a1a;
+        background-color: #2C3E50;  /* Azul oscuro cálido en vez de negro */
+        border-right: 1px solid #34495E;
     }
-    [data-testid="stSidebar"] * { color: #ffffff !important; }
+    [data-testid="stSidebar"] * { color: #ECF0F1 !important; }
     [data-testid="stSidebar"] .stRadio label { 
         font-size: 14px;
         padding: 8px 0;
-        color: #aaaaaa !important;
+        color: #BDC3C7 !important;
     }
     [data-testid="stSidebar"] .stRadio [aria-checked="true"] + label {
-        color: #ffffff !important;
+        color: #E67E22 !important;  /* Naranja cálido */
     }
 
     /* Color del valor seleccionado en selectbox del sidebar */
     [data-testid="stSidebar"] .stSelectbox div[data-baseweb="select"] > div {
-        background-color: #1a1a1a !important;
-        border-color: #333333 !important;
+        background-color: #34495E !important;
+        border-color: #E67E22 !important;  /* Borde naranja */
     }
 
     [data-testid="stSidebar"] .stSelectbox div[data-baseweb="select"] > div > div {
-        color: #ffffff !important;
+        color: #ECF0F1 !important;
     }
 
     [data-testid="stSidebar"] .stSelectbox input {
-        color: #ffffff !important;
-        background-color: #1a1a1a !important;
+        color: #ECF0F1 !important;
+        background-color: #34495E !important;
     }
 
-    /* Cards */
+    /* ════════════════════════════════════════════════════════════════════ */
+    /* SELECTBOXES/DROPDOWNS CON TONOS CÁLIDOS */
+    /* ════════════════════════════════════════════════════════════════════ */
+    .stSelectbox > div > div {
+        background-color: #FFFBF0 !important;  /* Fondo marfil */
+        border: 2px solid #F39C12 !important;  /* Borde ámbar */
+        border-radius: 8px !important;
+    }
+
+    .stSelectbox label {
+        color: #D35400 !important;  /* Naranja oscuro */
+        font-weight: 600 !important;
+    }
+
+    /* ════════════════════════════════════════════════════════════════════ */
+    /* BOTÓN PREDECIR CON COLOR SIDEBAR */
+    /* ════════════════════════════════════════════════════════════════════ */
+    .stButton > button {
+        background-color: #2C3E50 !important;  /* Mismo color que sidebar */
+        color: #ECF0F1 !important;
+        border: none !important;
+        border-radius: 8px !important;
+        padding: 0.75rem 2rem !important;
+        font-weight: 600 !important;
+        font-size: 1rem !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 4px 8px rgba(44, 62, 80, 0.3) !important;
+    }
+
+    .stButton > button:hover {
+        background-color: #34495E !important;  /* Un tono más claro al hover */
+        box-shadow: 0 6px 12px rgba(44, 62, 80, 0.5) !important;
+        transform: translateY(-2px) !important;
+    }
+
+    /* ════════════════════════════════════════════════════════════════════ */
+    /* CARDS CON TONOS CÁLIDOS */
+    /* ════════════════════════════════════════════════════════════════════ */
     .card {
-        background: #ffffff;
+        background: #FFFBF0;  /* Marfil cálido */
         border-radius: 12px;
         padding: 24px;
-        border: 1px solid #eeeeee;
+        border: 1px solid #F39C12;  /* Borde ámbar */
         margin-bottom: 16px;
+        box-shadow: 0 2px 8px rgba(230, 126, 34, 0.1);
     }
 
     .metric-card {
-        background: #ffffff;
+        background: #FFFBF0;
         border-radius: 12px;
         padding: 20px 24px;
-        border: 1px solid #eeeeee;
+        border: 1px solid #F39C12;
         text-align: center;
+        box-shadow: 0 2px 8px rgba(230, 126, 34, 0.1);
     }
 
     .metric-value {
         font-size: 32px;
         font-weight: 600;
-        color: #0a0a0a;
+        color: #D35400;  /* Naranja oscuro */
         font-family: 'DM Mono', monospace;
     }
 
     .metric-label {
         font-size: 12px;
-        color: #888888;
+        color: #7F8C8D;  /* Gris cálido */
         text-transform: uppercase;
         letter-spacing: 0.08em;
         margin-top: 4px;
     }
 
-    /* Confidence badges */
+    /* ════════════════════════════════════════════════════════════════════ */
+    /* CONFIDENCE BADGES CON TONOS CÁLIDOS */
+    /* ════════════════════════════════════════════════════════════════════ */
     .confidence-badge {
         display: inline-block;
         padding: 6px 12px;
@@ -142,30 +185,32 @@ st.markdown("""
         text-transform: uppercase;
         letter-spacing: 0.05em;
     }
-    .confidence-very_high { background: #22c55e; color: white; }
-    .confidence-high { background: #3b82f6; color: white; }
-    .confidence-medium { background: #f59e0b; color: white; }
-    .confidence-low { background: #6b7280; color: white; }
+    .confidence-very_high { background: #27AE60; color: white; }
+    .confidence-high { background: #F39C12; color: white; }  /* Ámbar */
+    .confidence-medium { background: #E67E22; color: white; }  /* Naranja */
+    .confidence-low { background: #95A5A6; color: white; }
 
-    /* Prob bars */
+    /* ════════════════════════════════════════════════════════════════════ */
+    /* BARRAS DE PROBABILIDAD */
+    /* ════════════════════════════════════════════════════════════════════ */
     .prob-bar-container { margin: 8px 0; }
     .prob-label {
         display: flex;
         justify-content: space-between;
         font-size: 13px;
         margin-bottom: 4px;
-        color: #333;
+        color: #2C3E50;
     }
     .prob-bar {
         height: 6px;
         border-radius: 3px;
-        background: #eeeeee;
+        background: #ECF0F1;
         overflow: hidden;
     }
     .prob-fill {
         height: 100%;
         border-radius: 3px;
-        background: #0a0a0a;
+        background: linear-gradient(90deg, #E67E22 0%, #D35400 100%);  /* Gradiente naranja */
         transition: width 0.5s ease;
     }
 
@@ -175,35 +220,40 @@ st.markdown("""
         font-weight: 600;
         text-transform: uppercase;
         letter-spacing: 0.1em;
-        color: #888888;
+        color: #7F8C8D;
         margin-bottom: 16px;
     }
 
-    /* Match header */
+    /* ════════════════════════════════════════════════════════════════════ */
+    /* MATCH HEADER CON TONOS CÁLIDOS */
+    /* ════════════════════════════════════════════════════════════════════ */
     .match-header {
         display: flex;
         align-items: center;
         justify-content: center;
         gap: 24px;
         padding: 32px;
-        background: #0a0a0a;
+        background: linear-gradient(135deg, #2C3E50 0%, #34495E 100%);
         border-radius: 12px;
         margin-bottom: 24px;
+        box-shadow: 0 4px 12px rgba(230, 126, 34, 0.2);
     }
     .team-name {
         font-size: 20px;
         font-weight: 600;
-        color: #ffffff;
+        color: #ECF0F1;
         text-align: center;
     }
     .vs-badge {
         font-size: 12px;
-        color: #666666;
+        color: #E67E22;  /* Naranja */
         font-family: 'DM Mono', monospace;
         letter-spacing: 0.2em;
     }
 
-    /* Table */
+    /* ════════════════════════════════════════════════════════════════════ */
+    /* TABLA DE CLASIFICACIÓN */
+    /* ════════════════════════════════════════════════════════════════════ */
     .standings-table {
         width: 100%;
         border-collapse: collapse;
@@ -216,31 +266,31 @@ st.markdown("""
         font-weight: 600;
         text-transform: uppercase;
         letter-spacing: 0.08em;
-        color: #888888;
-        border-bottom: 1px solid #eeeeee;
+        color: #7F8C8D;
+        border-bottom: 1px solid #F39C12;  /* Borde ámbar */
     }
     .standings-table td {
         padding: 10px 12px;
-        border-bottom: 1px solid #f5f5f5;
-        color: #0a0a0a;
+        border-bottom: 1px solid #ECF0F1;
+        color: #2C3E50;
     }
-    .standings-table tr:hover td { background: #f8f9fa; }
+    .standings-table tr:hover td { background: #FFF5E1; }  /* Hover cálido */
     .pos-badge {
         display: inline-block;
         width: 24px;
         height: 24px;
         border-radius: 6px;
-        background: #f0f0f0;
+        background: #ECF0F1;
         text-align: center;
         line-height: 24px;
         font-size: 12px;
         font-weight: 600;
         font-family: 'DM Mono', monospace;
     }
-    .pos-1 { background: #FFD700; color: #0a0a0a; }
-    .pos-2 { background: #C0C0C0; color: #0a0a0a; }
+    .pos-1 { background: #FFD700; color: #2C3E50; }
+    .pos-2 { background: #C0C0C0; color: #2C3E50; }
     .pos-3 { background: #CD7F32; color: #ffffff; }
-    .pos-rel { background: #ff4444; color: #ffffff; }
+    .pos-rel { background: #E74C3C; color: #ffffff; }
 
     /* Value bet indicator */
     .value-indicator {
@@ -251,8 +301,8 @@ st.markdown("""
         display: inline-block;
         margin-left: 8px;
     }
-    .value-positive { background: #dcfce7; color: #16a34a; }
-    .value-negative { background: #fee2e2; color: #dc2626; }
+    .value-positive { background: #d4edda; color: #27AE60; }
+    .value-negative { background: #f8d7da; color: #E74C3C; }
 
     /* Hide streamlit branding */
     #MainMenu { visibility: hidden; }
@@ -319,7 +369,7 @@ if section == "Predicción":
         away_team = st.selectbox("Visitante", away_options, key="away")
 
     # BOTÓN DE PREDICCIÓN - Solo guarda en session_state
-    if st.button("Predecir", type="primary", width="stretch"):
+    if st.button("Predecir", type="primary", width='stretch'):
         with st.spinner("Calculando predicción..."):
             try:
                 resp = requests.post(
@@ -406,9 +456,9 @@ if section == "Predicción":
             # Gráfico de barras con Plotly
             categories = [labels_map["1"], labels_map["X"], labels_map["2"]]
             values = [probs["1"], probs["X"], probs["2"]]
-            colors = ['#3b82f6' if predicted == '1' else '#e5e7eb',
-                      '#f59e0b' if predicted == 'X' else '#e5e7eb',
-                      '#ef4444' if predicted == '2' else '#e5e7eb']
+            colors = ['#E67E22' if predicted == '1' else '#e5e7eb',
+                      '#F39C12' if predicted == 'X' else '#e5e7eb',
+                      '#E74C3C' if predicted == '2' else '#e5e7eb']
 
             fig = go.Figure(data=[
                 go.Bar(
@@ -443,7 +493,7 @@ if section == "Predicción":
                 font=dict(family='DM Sans'),
             )
 
-            st.plotly_chart(fig, width="stretch")
+            st.plotly_chart(fig, width='stretch')
 
         with col2:
             st.markdown('<div class="section-title">Cuotas del modelo</div>', unsafe_allow_html=True)
@@ -489,8 +539,6 @@ if section == "Predicción":
         # ═══════════════════════════════════════════════════════════
 
         if 'over_under_goals' in data:
-            st.markdown("---")
-
             # Dividir en 2 columnas: Over/Under (izq) y Paradas (der)
             col_ou, col_saves = st.columns(2)
 
@@ -508,8 +556,8 @@ if section == "Predicción":
                     over_winner = over_pct > under_pct
 
                     st.markdown(f"""
-                    <div style='background: #ffffff; border: 2px solid #e5e7eb; border-radius: 12px; padding: 12px;'>
-                        <div style='font-size: 11px; font-weight: 600; color: #888; margin-bottom: 8px; text-align: center; text-transform: uppercase; letter-spacing: 0.05em;'>
+                    <div style='border: 2px; border-radius: 12px; padding: 12px;'>
+                        <div style='font-size: 11px; font-weight: 600; color: #D35400; margin-bottom: 8px; text-align: center; text-transform: uppercase; letter-spacing: 0.05em;'>
                             GOLES + 0.5
                         </div>
                         <div style='display: flex; gap: 6px;'>
@@ -531,8 +579,8 @@ if section == "Predicción":
                     over_winner = over_pct > under_pct
 
                     st.markdown(f"""
-                    <div style='background: #ffffff; border: 2px solid #e5e7eb; border-radius: 12px; padding: 12px;'>
-                        <div style='font-size: 11px; font-weight: 600; color: #888; margin-bottom: 8px; text-align: center; text-transform: uppercase; letter-spacing: 0.05em;'>
+                    <div style='border: 2px; border-radius: 12px; padding: 12px;'>
+                        <div style='font-size: 11px; font-weight: 600; color: #D35400; margin-bottom: 8px; text-align: center; text-transform: uppercase; letter-spacing: 0.05em;'>
                             GOLES + 1.5
                         </div>
                         <div style='display: flex; gap: 6px;'>
@@ -557,8 +605,8 @@ if section == "Predicción":
                     over_winner = over_pct > under_pct
 
                     st.markdown(f"""
-                    <div style='background: #ffffff; border: 2px solid #e5e7eb; border-radius: 12px; padding: 12px;'>
-                        <div style='font-size: 11px; font-weight: 600; color: #888; margin-bottom: 8px; text-align: center; text-transform: uppercase; letter-spacing: 0.05em;'>
+                    <div style='border: 2px; border-radius: 12px; padding: 12px;'>
+                        <div style='font-size: 11px; font-weight: 600; color: #D35400; margin-bottom: 8px; text-align: center; text-transform: uppercase; letter-spacing: 0.05em;'>
                             GOLES + 2.5
                         </div>
                         <div style='display: flex; gap: 6px;'>
@@ -580,8 +628,8 @@ if section == "Predicción":
                     over_winner = over_pct > under_pct
 
                     st.markdown(f"""
-                    <div style='background: #ffffff; border: 2px solid #e5e7eb; border-radius: 12px; padding: 12px;'>
-                        <div style='font-size: 11px; font-weight: 600; color: #888; margin-bottom: 8px; text-align: center; text-transform: uppercase; letter-spacing: 0.05em;'>
+                    <div style='border: 2px; border-radius: 12px; padding: 12px;'>
+                        <div style='font-size: 11px; font-weight: 600; color: #D35400; margin-bottom: 8px; text-align: center; text-transform: uppercase; letter-spacing: 0.05em;'>
                             GOLES + 3.5
                         </div>
                         <div style='display: flex; gap: 6px;'>
@@ -599,11 +647,190 @@ if section == "Predicción":
 
             with col_saves:
                 st.markdown('<div class="section-title">🧤 Paradas del Portero</div>', unsafe_allow_html=True)
-                st.markdown("""
-                <div style='background: #f8f9fa; border-radius: 12px; padding: 60px 24px; text-align: center; color: #888;'>
-                    <div style='font-size: 14px;'>Próximamente</div>
-                </div>
-                """, unsafe_allow_html=True)
+
+                # Obtener datos de saves
+                if 'saves' in data and data['saves']:
+                    saves_home = data['saves'].get('home', {})
+                    saves_away = data['saves'].get('away', {})
+
+                    # Grid 2 columnas
+                    col_home_saves, col_away_saves = st.columns(2)
+
+                    with col_home_saves:
+                        st.markdown(
+                            f"<div style='text-align:center; font-weight:600; color:#D35400; margin-bottom:12px;'>🏠 {home_team_display.replace('-', ' ').title()}</div>",
+                            unsafe_allow_html=True)
+
+                        for threshold in ['over_0_5', 'over_1_5', 'over_2_5', 'over_3_5', 'over_4_5']:
+                            prob = saves_home.get(threshold, 0) * 100
+                            odd = 1 / (prob / 100) if prob > 0 else 0
+                            label = threshold.replace('over_', '>').replace('_', '.')
+
+                            st.markdown(f"""
+                            <div style='display:flex; justify-content:space-between; align-items:center; padding:8px 12px; border-bottom:1px solid #ECF0F1;'>
+                                <span style='color:#7F8C8D; font-size:13px;'>{label} paradas</span>
+                                <div style='display:flex; gap:12px; align-items:center;'>
+                                    <span style='color:#E67E22; font-weight:600; font-size:14px;'>{prob:.1f}%</span>
+                                    <span style='color:#95A5A6; font-size:12px;'>({odd:.2f})</span>
+                                </div>
+                            </div>
+                            """, unsafe_allow_html=True)
+
+                    with col_away_saves:
+                        st.markdown(
+                            f"<div style='text-align:center; font-weight:600; color:#D35400; margin-bottom:12px;'>✈️ {away_team_display.replace('-', ' ').title()}</div>",
+                            unsafe_allow_html=True)
+
+                        for threshold in ['over_0_5', 'over_1_5', 'over_2_5', 'over_3_5', 'over_4_5']:
+                            prob = saves_away.get(threshold, 0) * 100
+                            odd = 1 / (prob / 100) if prob > 0 else 0
+                            label = threshold.replace('over_', '>').replace('_', '.')
+
+                            st.markdown(f"""
+                            <div style='display:flex; justify-content:space-between; align-items:center; padding:8px 12px; border-bottom:1px solid #ECF0F1;'>
+                                <span style='color:#7F8C8D; font-size:13px;'>{label} paradas</span>
+                                <div style='display:flex; gap:12px; align-items:center;'>
+                                    <span style='color:#E67E22; font-weight:600; font-size:14px;'>{prob:.1f}%</span>
+                                    <span style='color:#95A5A6; font-size:12px;'>({odd:.2f})</span>
+                                </div>
+                            </div>
+                            """, unsafe_allow_html=True)
+                else:
+                    st.info("No hay datos de paradas disponibles")
+
+            st.markdown("---")
+
+        # ═══════════════════════════════════════════════════════════
+        # CÓRNERS (ESTILO PARADAS: 6 COLUMNAS)
+        # ═══════════════════════════════════════════════════════════
+
+        if 'corners' in data and data['corners']:
+            st.markdown('<div class="section-title">🚩 CÓRNERS</div>', unsafe_allow_html=True)
+
+            corners_home = data['corners'].get('home', {})
+            corners_away = data['corners'].get('away', {})
+
+            # Grid 3 columnas sub cabeceras
+            col1_subheader, col2_subheader, col3_subheader = st.columns(3)
+
+            # Grid 6 columnas
+            col1, col2, col3, col4, col5, col6 = st.columns(6)
+
+            # Headers
+            with col1_subheader:
+                st.markdown(
+                    "<div style='text-align:center; font-weight:600; color:#D35400; margin-bottom:12px;'>🏠 LOCAL </div>",
+                    unsafe_allow_html=True)
+            with col2_subheader:
+                st.markdown(
+                    "<div style='text-align:center; font-weight:600; color:#D35400; margin-bottom:12px;'>✈️ VISITANTE </div>",
+                    unsafe_allow_html=True)
+            with col3_subheader:
+                st.markdown(
+                    "<div style='text-align:center; font-weight:600; color:#D35400; margin-bottom:12px;'>📊 TOTAL </div>",
+                    unsafe_allow_html=True)
+
+            # Thresholds para cada columna
+            col1_thresholds = ['over_5_5', 'over_6_5', 'over_7_5', 'over_8_5']
+            col2_thresholds = ['over_9_5', 'over_10_5', 'over_11_5', 'over_12_5']
+
+            # Columna 1: LOCAL 5.5-8.5
+            with col1:
+                for threshold in col1_thresholds:
+                    prob = corners_home.get(threshold, 0) * 100
+                    odd = 1 / (prob / 100) if prob > 0 else 0
+                    label = threshold.replace('over_', '>').replace('_', '.')
+
+                    st.markdown(f"""
+                    <div style='display:flex; justify-content:space-between; align-items:center; padding:8px 12px; border-bottom:1px solid #ECF0F1; background:#FFF5E1; border-radius:4px; margin-bottom:4px;'>
+                        <span style='color:#7F8C8D; font-size:13px;'>{label}</span>
+                        <div style='display:flex; gap:8px; align-items:center;'>
+                            <span style='color:#E67E22; font-weight:600; font-size:14px;'>{prob:.1f}%</span>
+                            <span style='color:#95A5A6; font-size:11px;'>({odd:.2f})</span>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+            # Columna 2: LOCAL 9.5-12.5
+            with col2:
+                for threshold in col2_thresholds:
+                    prob = corners_home.get(threshold, 0) * 100
+                    odd = 1 / (prob / 100) if prob > 0 else 0
+                    label = threshold.replace('over_', '>').replace('_', '.')
+
+                    st.markdown(f"""
+                    <div style='display:flex; justify-content:space-between; align-items:center; padding:8px 12px; border-bottom:1px solid #ECF0F1; background:#FFF5E1; border-radius:4px; margin-bottom:4px;'>
+                        <span style='color:#7F8C8D; font-size:13px;'>{label}</span>
+                        <div style='display:flex; gap:8px; align-items:center;'>
+                            <span style='color:#E67E22; font-weight:600; font-size:14px;'>{prob:.1f}%</span>
+                            <span style='color:#95A5A6; font-size:11px;'>({odd:.2f})</span>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+            # Columna 3: VISITANTE 5.5-8.5
+            with col3:
+                for threshold in col1_thresholds:
+                    prob = corners_away.get(threshold, 0) * 100
+                    odd = 1 / (prob / 100) if prob > 0 else 0
+                    label = threshold.replace('over_', '>').replace('_', '.')
+
+                    st.markdown(f"""
+                    <div style='display:flex; justify-content:space-between; align-items:center; padding:8px 12px; border-bottom:1px solid #ECF0F1; background:#FFF5E1; border-radius:4px; margin-bottom:4px;'>
+                        <span style='color:#2C3E50; font-size:13px;'>{label}</span>
+                        <div style='display:flex; gap:8px; align-items:center;'>
+                            <span style='color:#E67E22; font-weight:600; font-size:14px;'>{prob:.1f}%</span>
+                            <span style='color:#95A5A6; font-size:11px;'>({odd:.2f})</span>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+            # Columna 4: VISITANTE 9.5-12.5
+            with col4:
+                for threshold in col2_thresholds:
+                    prob = corners_away.get(threshold, 0) * 100
+                    odd = 1 / (prob / 100) if prob > 0 else 0
+                    label = threshold.replace('over_', '>').replace('_', '.')
+
+                    st.markdown(f"""
+                    <div style='display:flex; justify-content:space-between; align-items:center; padding:8px 12px; border-bottom:1px solid #ECF0F1; background:#FFF5E1; border-radius:4px; margin-bottom:4px;'>
+                        <span style='color:#2C3E50; font-size:13px;'>{label}</span>
+                        <div style='display:flex; gap:8px; align-items:center;'>
+                            <span style='color:#E67E22; font-weight:600; font-size:14px;'>{prob:.1f}%</span>
+                            <span style='color:#95A5A6; font-size:11px;'>({odd:.2f})</span>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+            # Columna 5: TOTAL 5.5-8.5 (suma local + visitante)
+            with col5:
+                for threshold in col1_thresholds:
+                    home_prob = corners_home.get(threshold, 0) * 100
+                    away_prob = corners_away.get(threshold, 0) * 100
+                    total_prob = home_prob + away_prob
+                    label = threshold.replace('over_', '>').replace('_', '.')
+
+                    st.markdown(f"""
+                    <div style='display:flex; justify-content:space-between; padding:8px 12px; border-bottom:1px solid #ECF0F1; background:#FFF5E1; border-radius:4px; margin-bottom:4px;'>
+                        <span style='color:#7F8C8D; font-size:13px;'+{label} corners</span>
+                        <span style='color:#D35400; font-weight:600; font-size:14px;'>{total_prob:.1f}%</span>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+            # Columna 6: TOTAL 9.5-12.5 (suma local + visitante)
+            with col6:
+                for threshold in col2_thresholds:
+                    home_prob = corners_home.get(threshold, 0) * 100
+                    away_prob = corners_away.get(threshold, 0) * 100
+                    total_prob = home_prob + away_prob
+                    label = threshold.replace('over_', '>').replace('_', '.')
+
+                    st.markdown(f"""
+                    <div style='display:flex; justify-content:space-between; padding:8px 12px; border-bottom:1px solid #ECF0F1; background:#FFF5E1; border-radius:4px; margin-bottom:4px;'>
+                        <span style='color:#7F8C8D; font-size:13px;' + {label} corners</span>
+                        <span style='color:#D35400; font-weight:600; font-size:14px;'>{total_prob:.1f}%</span>
+                    </div>
+                    """, unsafe_allow_html=True)
 
             st.markdown("---")
 
@@ -747,7 +974,7 @@ elif section == "Estadísticas":
                     "": result_icon,
                     "Pts": int(r["points"])
                 })
-            st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+            st.dataframe(pd.DataFrame(rows), width='stretch', hide_index=True)
 
 
 # ─────────────────────────────────────────────
