@@ -302,6 +302,80 @@ def main():
 
     print("\n" + "=" * 60)
     print("✅ TODOS LOS ENTRENAMIENTOS SAVES COMPLETADOS")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    Ç
+
+
+
+
     print("=" * 60)
 
 

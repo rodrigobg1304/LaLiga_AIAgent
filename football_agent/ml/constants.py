@@ -132,5 +132,5 @@ MODEL_1X2_PREMIER = "/Users/rodrigobenitogarcia/PycharmProjects/LaLiga_AIAgent/f
 # THRESHOLDS - Saves y Corners
 # ═══════════════════════════════════════════════════════════
 
-SAVES_THRESHOLDS = [0.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, 8.5]
-CORNERS_THRESHOLDS = [5.5, 6.5, 7.5, 8.5, 9.5, 10.5, 11.5, 12.5, 13.5, 14.5]
+SAVES_THRESHOLDS = [0.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5]
+CORNERS_THRESHOLDS = [3.5, 4.5, 5.5, 6.5, 7.5, 8.5, 9.5]
