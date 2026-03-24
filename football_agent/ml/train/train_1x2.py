@@ -26,7 +26,8 @@ from constants import (
     MIN_PROB,
     RANDOM_STATE,
     LEAGUES,
-    TEST_SEASON
+    TEST_SEASON,
+    MODEL_BASE_DIR
 )
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "../../src"))
@@ -127,8 +128,7 @@ class Config:
     RANDOM_STATE = RANDOM_STATE
 
     # Output (directorio base)
-    MODELS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../models")
-    MODEL_1X2 = os.path.join(MODELS_DIR, "1x2", "production")
+    MODEL_1X2 = os.path.join(MODEL_BASE_DIR, "models", "1x2", "production")
     MODEL_1X2_LALIGA = os.path.join(MODEL_1X2, "laliga")
     MODEL_1X2_PREMIER = os.path.join(MODEL_1X2, "premier_league")
     MODEL_1X2_SERIEA = os.path.join(MODEL_1X2, "serie_a")

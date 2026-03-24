@@ -33,7 +33,9 @@ from constants import (
     H2H_LOOKBACK,
     MIN_H2H_MATCHES,
     LEAGUE_NAMES_NORMALIZED,
-    LEAGUES
+    LEAGUES,
+    SAVES_THRESHOLDS,
+    CORNERS_THRESHOLDS
 )
 
 
@@ -347,7 +349,7 @@ class ModelManagerSaves:
         self.league_name = LEAGUE_NAMES_NORMALIZED.get(LEAGUES.get(league_id, ''), 'unknown')
 
         # Thresholds disponibles
-        self.thresholds = [0.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, 8.5]
+        self.thresholds = SAVES_THRESHOLDS
 
         # Directorio de modelos
         self.models_dir = os.path.join(
@@ -500,7 +502,7 @@ class ModelManagerCorners:
         self.league_name = LEAGUE_NAMES_NORMALIZED.get(LEAGUES.get(league_id, ''), 'unknown')
 
         # Thresholds disponibles
-        self.thresholds = [5.5, 6.5, 7.5, 8.5, 9.5, 10.5, 11.5, 12.5, 13.5, 14.5]
+        self.thresholds = CORNERS_THRESHOLDS
 
         # Directorio de modelos
         self.models_dir = os.path.join(
@@ -638,6 +640,8 @@ class ModelManagerCorners:
 # Instancia global
 model_manager_1x2 = ModelManager1X2()
 model_manager_ou_goals = ModelManagerOverUnderGoals()
+model_manager_saves = {}
+model_manager_corners = {}
 
 # ══════════════════════════════════════════════════════════════════════════════
 # BAYESIAN BLEND: ELO → PROBABILIDADES 1X2
@@ -721,13 +725,28 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"⚠️  Error cargando modelos Over/Under: {e}")
 
+    # ── AÑADIR ESTO: PRECARGAR SAVES Y CORNERS ──
+    print("🚀 Precargando modelos Saves...")
+    try:
+        for league_id in ["8", "17", "23"]:
+            model_manager_saves[league_id] = ModelManagerSaves(league_id=league_id)
+        print("✅ Modelos Saves precargados para todas las ligas")
+    except Exception as e:
+        print(f"⚠️  Error cargando modelos Saves: {e}")
+
+    print("🚀 Precargando modelos Corners...")
+    try:
+        for league_id in ["8", "17", "23"]:
+            model_manager_corners[league_id] = ModelManagerCorners(league_id=league_id)
+        print("✅ Modelos Corners precargados para todas las ligas")
+    except Exception as e:
+        print(f"⚠️  Error cargando modelos Corners: {e}")
+
     print("✅ Precarga completada. API lista.")
     yield
 
 
 app = FastAPI(title="Football Prediction API", version="1.0", lifespan=lifespan)
-
-OVER_THRESHOLDS = [0.5, 1.5, 2.5, 3.5]
 
 LEAGUE_MODEL_MAP = {
     "8": "laliga",
@@ -1675,7 +1694,6 @@ class PredictionRequest(BaseModel):
 @app.post("/predict")
 def predict(req: PredictionRequest):
     # model_result, calibrated_model, label_encoder, feature_cols, elo_threshold, over_models = load_models(req.league_id)
-
     try:
         # ── FEATURES PARA 1X2 (40 o 47 dimensiones según liga) ──
         X_1x2 = build_features_1x2(req.home_team, req.away_team, req.year, req.league_id)
@@ -1725,8 +1743,12 @@ def predict(req: PredictionRequest):
     # SAVES (PARADAS DE PORTERO)
     # ══════════════════════════════════════════════════════════════════════════
     try:
-        saves_manager = ModelManagerSaves(league_id=req.league_id)
-        saves_predictions = saves_manager.predict_match(X_base_40)
+        saves_manager = model_manager_saves.get(req.league_id)
+        if saves_manager:
+            saves_predictions = saves_manager.predict_match(X_base_40)
+        else:
+            print(f"⚠️ No hay modelo de saves para liga {req.league_id}")
+            saves_predictions = {"home": {}, "away": {}}
     except Exception as e:
         print(f"⚠️ Error prediciendo saves: {e}")
         saves_predictions = {"home": {}, "away": {}}
@@ -1735,8 +1757,12 @@ def predict(req: PredictionRequest):
     # CORNERS (CÓRNERS)
     # ══════════════════════════════════════════════════════════════════════════
     try:
-        corners_manager = ModelManagerCorners(league_id=req.league_id)
-        corners_predictions = corners_manager.predict_match(X_base_40)
+        corners_manager = model_manager_corners.get(req.league_id)
+        if corners_manager:
+            corners_predictions = corners_manager.predict_match(X_base_40)
+        else:
+            print(f"⚠️ No hay modelo de corners para liga {req.league_id}")
+            corners_predictions = {"home": {}, "away": {}}
     except Exception as e:
         print(f"⚠️ Error prediciendo corners: {e}")
         corners_predictions = {"home": {}, "away": {}}

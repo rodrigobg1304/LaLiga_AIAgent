@@ -5,6 +5,7 @@ from football_agent.db import run_query, TABLE
 LEAGUES = {
     "8": "LaLiga",
     "17": "Premier League",
+    "23": "Serie A"
 }
 
 

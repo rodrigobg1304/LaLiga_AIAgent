@@ -17,17 +17,6 @@ from dotenv import load_dotenv
 
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
-
-@st.cache_data(ttl=3600)
-def cached_league_options():
-    return get_league_options()
-
-
-@st.cache_data(ttl=3600)
-def cached_teams_by_league(league_id: str):
-    return get_teams_by_league(league_id=league_id)
-
-
 # ─────────────────────────────────────────────
 # CONFIG
 # ─────────────────────────────────────────────
@@ -317,18 +306,23 @@ st.markdown("""
 # ─────────────────────────────────────────────
 
 @st.cache_data(ttl=3600)
-def cached_teams():
-    return get_teams()
-
-
-@st.cache_data(ttl=3600)
 def cached_years():
     return get_years()
 
 
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=3600)
 def cached_standings(league, year):
     return get_standings(leagueId=league, year=year)
+
+
+@st.cache_data(ttl=3600)
+def cached_league_options():
+    return get_league_options()
+
+
+@st.cache_data(ttl=3600)
+def cached_teams_by_league(league_id: str, season: str):
+    return get_teams_by_league(league_id=league_id, season=season)
 
 
 # ─────────────────────────────────────────────
@@ -359,7 +353,7 @@ if section == "Predicción":
     league_id = league_options[league_name]
 
     # Filtrar equipos por liga
-    teams = cached_teams_by_league(league_id=league_id)
+    teams = cached_teams_by_league(league_id=league_id, season=year_global)
 
     col1, col2 = st.columns(2)
     with col1:
@@ -731,8 +725,8 @@ if section == "Predicción":
                     unsafe_allow_html=True)
 
             # Thresholds para cada columna
-            col1_thresholds = ['over_5_5', 'over_6_5', 'over_7_5', 'over_8_5']
-            col2_thresholds = ['over_9_5', 'over_10_5', 'over_11_5', 'over_12_5']
+            col1_thresholds = ['over_2_5', 'over_3_5', 'over_4_5', 'over_5_5']
+            col2_thresholds = ['over_6_5', 'over_7_5', 'over_8_5', 'over_9_5']
 
             # Columna 1: LOCAL 5.5-8.5
             with col1:
@@ -921,7 +915,12 @@ if section == "Predicción":
 
 elif section == "Estadísticas":
     st.markdown("### Estadísticas de equipo")
-    team = st.selectbox("Equipo", cached_teams())
+    league_options = cached_league_options()
+    league_name = st.selectbox("Liga", list(league_options.keys()), key="league_select_stats")
+    league_id = league_options[league_name]
+
+    teams = cached_teams_by_league(league_id=league_id, season=year_global)
+    team = st.selectbox("Equipo", teams)
 
     if team:
         col1, col2, col3 = st.columns(3)

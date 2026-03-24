@@ -59,16 +59,35 @@ def get_teams() -> list[str]:
     return [row["homeTeam"] for row in run_query(f"SELECT DISTINCT homeTeam FROM {TABLE} ORDER BY homeTeam ASC")]
 
 
-def get_teams_by_league(league_id: str) -> list[str]:
+def get_teams_by_league(league_id: str, season: str = None) -> list[str]:
     """
-    Get list of the teams available filtered by league.
-    :param league_id:
-    :return:
+    Get list of the teams available filtered by league and optionally by season.
+    :param league_id: League ID to filter
+    :param season: Season to filter (e.g., '2024'). If None, returns all seasons.
+    :return: List of team names
     """
-    return [row["homeTeam"] for row in run_query(
-        f"SELECT DISTINCT homeTeam FROM {TABLE} WHERE LeagueId = %s ORDER BY homeTeam",
-        (league_id,)
-    )]
+    if season:
+        query = f"""
+                SELECT DISTINCT team FROM (
+                    SELECT homeTeam as team FROM {TABLE} WHERE LeagueId = %s AND Year = %s
+                    UNION
+                    SELECT awayTeam as team FROM {TABLE} WHERE LeagueId = %s AND Year = %s
+                ) teams
+                ORDER BY team
+                """
+        params = (league_id, season, league_id, season)
+    else:
+        query = f"""
+                SELECT DISTINCT team FROM (
+                    SELECT homeTeam as team FROM {TABLE} WHERE LeagueId = %s
+                    UNION
+                    SELECT awayTeam as team FROM {TABLE} WHERE LeagueId = %s
+                ) teams
+                ORDER BY team
+                """
+        params = (league_id, league_id)
+
+    return [row["team"] for row in run_query(query, params)]
 
 
 def get_years() -> list[str]:
