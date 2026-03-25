@@ -9,7 +9,7 @@ services:
     ports:
       - "8001:8001"
     volumes:
-      - ./football_agent/ml/models:/app/models:ro
+      - ./models:/app/models:ro
     env_file:
       - football_agent/.env
     environment:

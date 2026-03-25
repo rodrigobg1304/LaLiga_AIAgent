@@ -39,7 +39,7 @@ TEST_SEASONS = ['25/26']
 OVER_UNDER_THRESHOLDS = [0.5, 1.5, 2.5, 3.5]
 
 # Directorio base de modelos — se puede sobreescribir con la variable de entorno MODELS_DIR
-MODEL_BASE_DIR = os.getenv("MODELS_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "football_agent", "ml"))
+MODEL_BASE_DIR = os.getenv("MODELS_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", ".."))
 
 # ═══════════════════════════════════════════════════════════
 # FEATURES - Stats utilizadas en modelos

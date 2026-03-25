@@ -1,0 +1,7 @@
+{
+  "optimal_threshold": 0.37,
+  "features": 47,
+  "accuracy_draw_detector": 0.6703703703703704,
+  "accuracy_1v2": 0.6629834254143646,
+  "accuracy_cascade": 0.44074074074074077
+}

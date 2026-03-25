@@ -48,12 +48,18 @@ LaLiga_AIAgent/
 │       ├── train_over_under_saves.py     # Modelo Over/Under paradas de portero
 │       └── train_over_under_corners.py   # Modelo Over/Under córners
 │
-├── football_agent/                       # Código fuente original (referencia)
-│   ├── ml/
-│   │   ├── predict.py                    # Versión local del servidor de predicción
-│   │   ├── models/                       # Modelos entrenados (.pkl) — montado como volumen
-│   │   └── train/                        # Scripts de entrenamiento originales
-│   └── src/football_agent/              # Paquete CrewAI original
+├── models/                               # Artefactos ML entrenados (.pkl) — montado como volumen Docker
+│   ├── 1x2/production/                   # Modelos de resultado por liga
+│   └── over_under/                       # Modelos Over/Under (goals, saves, corners)
+│
+├── football_agent/                       # Entorno de desarrollo local del agente CrewAI
+│   ├── pyproject.toml
+│   └── src/football_agent/              # Paquete CrewAI (crew, tools, config)
+│
+├── scripts/                              # Utilidades y análisis exploratorio
+│   ├── eda_analysis.py
+│   ├── explore_stats.py
+│   └── create_indexes.py
 │
 ├── docker-compose.yml                    # Orquestación local de todos los servicios
 └── football_agent/.env                   # Variables de entorno (no subir a git)
@@ -180,22 +186,22 @@ Una vez levantado, accede a la web en: **http://localhost:8501**
 pip install -e football-core/
 
 # Lanzar el servidor de predicción
-cd football_agent/ml
-uvicorn predict:app --port 8001 --reload
+cd services/prediction
+MODELS_DIR=../../models uvicorn predict:app --port 8001 --reload
 
 # Lanzar el agente
-cd football_agent
+cd services/agent
 uvicorn agent_api:app --port 8002 --reload
 
 # Lanzar la UI
-cd football_agent
+cd services/streamlit
 streamlit run streamlit_app.py
 ```
 
 ### Entrenamiento de modelos
 
 ```bash
-cd football_agent/ml/train
+cd training/train
 
 # Entrenar modelos 1X2 para todas las ligas
 python train_1x2.py --leagues all
