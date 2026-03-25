@@ -1,9 +1,7 @@
 import sys
 import os
 
-sys.path.append(os.path.join(os.path.dirname(__file__), "../src"))
-
-from football_agent.db import run_query, TABLE
+from football_core.db import run_query, TABLE
 import pandas as pd
 import numpy as np
 

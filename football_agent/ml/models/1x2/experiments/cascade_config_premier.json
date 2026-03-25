@@ -1,7 +1,3 @@
-{
-  "optimal_threshold": 0.37,
-  "features": 47,
-  "accuracy_draw_detector": 0.6703703703703704,
-  "accuracy_1v2": 0.6629834254143646,
-  "accuracy_cascade": 0.44074074074074077
-}
+version https://git-lfs.github.com/spec/v1
+oid sha256:062b28a8fdc068166e62a6be55d28337b4cf36ba3b6a8c12a81c55051b04a593
+size 178

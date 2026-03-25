@@ -1,0 +1,11 @@
+ football_query_task:
+  description: >
+    El usuario pregunta: '{query}'.
+    OBLIGATORIO: Debes usar las tools disponibles para consultar la base de datos.
+    NO respondas basándote en tu conocimiento previo.
+    NO digas que no tienes datos sin haber llamado a las tools primero.
+    Llama a la tool más apropiada con los parámetros extraídos de la pregunta.
+  expected_output: >
+    Respuesta estructurada en español con los datos reales obtenidos de la base de datos.
+    Las tablas que muestres deben estar bien formateadas, como si fuera para un markdown.
+  agent: football_analyst

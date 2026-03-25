@@ -419,3 +419,25 @@ FodyWeavers.xsd
 *.msix
 *.msm
 *.msp
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+*.egg-info/
+
+# Secrets
+*.ini
+.env
+.env.*
+
+# ML models
+
+# IDE
+.idea/
+.claude/
+
+# OS
+.DS_Store
+exports/

@@ -8,8 +8,7 @@ from sklearn.metrics import classification_report, accuracy_score
 import pickle
 import logging
 
-sys.path.append(os.path.join(os.path.dirname(__file__), "../src"))
-from football_agent.db import TABLE, run_query
+from football_core.db import TABLE, run_query
 
 # Importar funciones del train.py principal
 from train import (

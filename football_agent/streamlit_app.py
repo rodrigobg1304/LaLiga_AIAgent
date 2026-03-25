@@ -9,10 +9,9 @@ import plotly.graph_objects as go
 os.environ["CREWAI_DISABLE_TELEMETRY"] = "true"
 os.environ["OTEL_SDK_DISABLED"] = "true"
 
-sys.path.append(os.path.join(os.path.dirname(__file__), "src"))
-from football_agent.db import (get_teams, get_years, get_standings, get_team_results, get_goals_scored,
-                               get_teams_by_league)
-from football_agent.config import get_league_options
+from football_core.db import (get_teams, get_years, get_standings, get_team_results, get_goals_scored,
+                              get_teams_by_league)
+from football_core.config import get_league_options
 from dotenv import load_dotenv
 
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))

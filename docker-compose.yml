@@ -1,0 +1,58 @@
+version: '3.9'
+
+services:
+
+  prediction-service:
+    build:
+      context: .
+      dockerfile: services/prediction/Dockerfile
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./football_agent/ml/models:/app/models:ro
+    env_file:
+      - football_agent/.env
+    environment:
+      - MODELS_DIR=/app/models
+      - OPENBLAS_NUM_THREADS=1
+      - OMP_NUM_THREADS=1
+      - GOTO_NUM_THREADS=1
+      - MKL_NUM_THREADS=1
+      - NUMEXPR_NUM_THREADS=1
+    security_opt:
+      - seccomp:unconfined
+    restart: unless-stopped
+
+  agent-service:
+    build:
+      context: .
+      dockerfile: services/agent/Dockerfile
+    ports:
+      - "8002:8002"
+    env_file:
+      - football_agent/.env
+    environment:
+      - PREDICTION_URL=http://prediction-service:8001
+    security_opt:
+      - seccomp:unconfined
+    depends_on:
+      - prediction-service
+    restart: unless-stopped
+
+  streamlit-ui:
+    build:
+      context: .
+      dockerfile: services/streamlit/Dockerfile
+    ports:
+      - "8501:8501"
+    env_file:
+      - football_agent/.env
+    environment:
+      - PREDICTION_URL=http://prediction-service:8001
+      - AGENT_URL=http://agent-service:8002
+    security_opt:
+      - seccomp:unconfined
+    depends_on:
+      - prediction-service
+      - agent-service
+    restart: unless-stopped

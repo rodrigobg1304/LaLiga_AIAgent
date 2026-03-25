@@ -11,9 +11,7 @@ import pickle
 from datetime import datetime
 import logging
 
-sys.path.append(os.path.join(os.path.dirname(__file__), "../src"))
-# Importar funciones de tu db.py
-from football_agent.db import (TABLE, get_connection, run_query, get_league_all_stats)
+from football_core.db import (TABLE, get_connection, run_query, get_league_all_stats)
 
 
 # ============================================================================
