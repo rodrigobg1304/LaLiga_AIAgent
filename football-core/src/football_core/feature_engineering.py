@@ -740,3 +740,24 @@ def build_features_1x2(home_team: str, away_team: str, year: Optional[str],
     feature_vector = np.array([[features.get(col, 0.0) for col in feature_order]], dtype=np.float64)
 
     return feature_vector
+
+
+def build_features_qualy(home_team: str, away_team: str, year: Optional[str],
+                         league_id: str, is_qualifier: int) -> np.ndarray:
+    """
+    Construye el vector de features (41 dimensiones) para modelos de clasificatorias.
+
+    Las 40 features base son idénticas a build_features_1x2 pero se construyen con
+    year=None para evitar la discrepancia de formato entre ligas domésticas ("25/26")
+    y torneos internacionales ("2026").  El ELO sí se calcula correctamente porque
+    usa la caché global (independiente de year).
+
+    Feature 41: is_qualifier (1 = partido de clasificatoria, 0 = torneo principal).
+    """
+    # Construir las 40 features base usando year=None
+    # → ELO correcto (caché global incluye partidos internacionales)
+    # → Stats de equipo neutras (year=None → sin filtro de temporada → defaults)
+    # → H2H basado en todos los enfrentamientos históricos entre las selecciones
+    features_40 = build_features_1x2(home_team, away_team, year=None, league_id=league_id)
+    is_q = np.array([[float(is_qualifier)]], dtype=np.float64)
+    return np.hstack([features_40, is_q])

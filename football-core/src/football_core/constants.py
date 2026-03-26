@@ -107,14 +107,62 @@ RANDOM_STATE = 42           # Seed para reproducibilidad
 LEAGUES = {
     '8': 'LaLiga',
     '17': 'Premier League',
-    '23': 'Serie A'
+    '23': 'Serie A',
+    '11': 'Qualy WC Europe',
+    '16': 'World Cup',
+}
+
+# ── Ligas domésticas ──────────────────────────────────────────────────────────
+SOFASCORE_LEAGUES = {
+    '8': 'LaLiga',
+    '17': 'PremierLeague',
+    '23': 'SerieA',
+}
+
+# ── Torneos regulares (histórico continuo: Champions, EL, Conference) ─────────
+# IDs pendientes de confirmar en Sofascore
+SOFASCORE_TOURNAMENTS_REGULAR: dict[str, str] = {
+    # '7':   'ChampionsLeague',
+    # '679': 'EuropaLeague',
+    # 'XXX': 'ConferenceLeague',
+}
+
+# ── Torneos/Clasificatorias internacionales (cada 4 años) ────────────────────
+SOFASCORE_TOURNAMENTS_QUALIFIER: dict[str, str] = {
+    '1':  'Eurocopa',
+    '27': 'Qualy_Euro',
+    '16':  'WorldCup',
+    '11': 'Qualy_WorldCup_Europe',
+    # 'XXX': 'CopaAmerica',
+}
+
+# ── Combinado — usado por sofascore_client.py como league_dict ────────────────
+SOFASCORE_ALL: dict[str, str] = {
+    **SOFASCORE_LEAGUES,
+    **SOFASCORE_TOURNAMENTS_REGULAR,
+    **SOFASCORE_TOURNAMENTS_QUALIFIER,
+}
+
+# ── Zonas horarias por LeagueId — para almacenar hora local del partido ───────
+# Usadas para calcular MatchDateLocal a partir del timestamp UTC de Sofascore.
+# Los torneos usan la zona horaria del país sede del evento.
+LEAGUE_TIMEZONES: dict[str, str] = {
+    '8':  'Europe/Madrid',   # LaLiga
+    '17': 'Europe/London',   # Premier League
+    '23': 'Europe/Rome',     # Serie A
+    '1':  'Europe/Berlin',   # Eurocopa (sede Germany 2024)
+    '27': 'Europe/Madrid',   # Qualy Euro (partidos en España principalmente)
+    '11': 'Europe/Madrid',   # Qualy WorldCup Euro (partidos en España principalmente)
+    '16': 'Europe/Madrid',    # WorldCup (sede cambia elegimos España)
 }
 
 # Normalización de nombres (para rutas de archivos)
 LEAGUE_NAMES_NORMALIZED = {
     'LaLiga': 'laliga',
     'Premier League': 'premier_league',
-    'Serie A': 'serie_a'
+    'Serie A': 'serie_a',
+    'Qualy WC Europe': 'worldcup_europe',
+    'World Cup': 'worldcup_europe',
 }
 
 # ═══════════════════════════════════════════════════════════

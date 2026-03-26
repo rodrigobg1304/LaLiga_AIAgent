@@ -14,7 +14,7 @@ from football_core.db import (run_query, TABLE, get_all_matches_chronological, g
                               get_team_recent_matches_goals, get_h2h_matches, get_proxy_h2h_matches,
                               get_team_stat_average, get_team_multiple_stats_average,
                               get_team_win_rates, get_team_goals_conceded_average, get_team_matches_total_goals)
-from football_core.feature_engineering import build_features_1x2, warm_cache
+from football_core.feature_engineering import build_features_1x2, build_features_qualy, warm_cache
 
 from football_core.constants import (
     FEATURES,
@@ -50,6 +50,14 @@ MODEL_OVER_UNDER_GOALS = os.path.join(MODELS_DIR, "over_under", "goals", "produc
 MODEL_OVER_UNDER_GOALS_LALIGA = os.path.join(MODEL_OVER_UNDER_GOALS, "laliga")
 MODEL_OVER_UNDER_GOALS_PREMIER = os.path.join(MODEL_OVER_UNDER_GOALS, "premier_league")
 MODEL_OVER_UNDER_GOALS_SERIEA = os.path.join(MODEL_OVER_UNDER_GOALS, "serie_a")
+
+# ── Clasificatorias/Torneos internacionales (World Cup Europe) ──
+QUALY_LEAGUES = {'11', '16'}          # 11=Qualy WC Europe, 16=World Cup
+QUALY_LEAGUE_SLUG = 'worldcup_europe'
+QUALY_FILE_SUFFIX = 'qualy'
+QUALY_IS_QUALIFIER = {'11': 1, '16': 0}   # 1 = clasificatoria, 0 = torneo
+MODEL_1X2_QUALY = os.path.join(MODEL_1X2, QUALY_LEAGUE_SLUG)
+MODEL_OVER_UNDER_GOALS_QUALY = os.path.join(MODEL_OVER_UNDER_GOALS, QUALY_LEAGUE_SLUG)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # MODEL MANAGER PARA 1X2 (RF + ENSEMBLE)
@@ -118,6 +126,15 @@ class ModelManager1X2:
                 'xgb_weight': xgb_weight
             }
             print(f"  ✅ Premier: Ensemble cargado (RF={rf_weight}, XGB={xgb_weight})")
+
+        # Qualy WC Europe (11) + World Cup (16) — modelo compartido
+        qualy_path = os.path.join(MODEL_1X2_QUALY, "model_1x2_qualy.pkl")
+        if os.path.exists(qualy_path):
+            with open(qualy_path, 'rb') as f:
+                qualy_model = pickle.load(f)
+            for lid in QUALY_LEAGUES:
+                self.models[lid] = {'type': 'rf', 'model': qualy_model}
+            print(f"  ✅ Qualy WC Europe + World Cup: RF cargado ({QUALY_LEAGUE_SLUG})")
 
         print("✅ Modelos 1X2 cargados exitosamente")
 
@@ -236,34 +253,33 @@ class ModelManagerOverUnderGoals:
         if league_id in self.league_models:
             return  # Ya cargados
 
-        league_name = {
-            "8": "laliga",
-            "17": "premier_league",
-            "23": "serie_a"
-        }.get(league_id, "laliga")
-
-        league_dir_map = {
-            "8": MODEL_OVER_UNDER_GOALS_LALIGA,
-            "17": MODEL_OVER_UNDER_GOALS_PREMIER,
-            "23": MODEL_OVER_UNDER_GOALS_SERIEA
-        }
-
-        league_dir = league_dir_map.get(league_id, MODEL_OVER_UNDER_GOALS_LALIGA)
+        if league_id in QUALY_LEAGUES:
+            league_dir = MODEL_OVER_UNDER_GOALS_QUALY
+            file_suffix = QUALY_FILE_SUFFIX
+        else:
+            file_suffix = {
+                "8": "laliga", "17": "premier_league", "23": "serie_a"
+            }.get(league_id, "laliga")
+            league_dir = {
+                "8": MODEL_OVER_UNDER_GOALS_LALIGA,
+                "17": MODEL_OVER_UNDER_GOALS_PREMIER,
+                "23": MODEL_OVER_UNDER_GOALS_SERIEA
+            }.get(league_id, MODEL_OVER_UNDER_GOALS_LALIGA)
 
         self.league_models[league_id] = {}
 
         for threshold in self.thresholds:
             threshold_str = str(threshold).replace(".", "_")
-            model_path = os.path.join(league_dir, f"model_over_{threshold_str}_{league_name}.pkl")
+            model_path = os.path.join(league_dir, f"model_over_{threshold_str}_{file_suffix}.pkl")
 
             if not os.path.exists(model_path):
-                print(f"⚠️  Modelo Over/Under {threshold} no encontrado para {league_name}")
+                print(f"⚠️  Modelo Over/Under {threshold} no encontrado para {file_suffix}")
                 continue
 
             try:
                 with open(model_path, 'rb') as f:
                     self.league_models[league_id][threshold] = pickle.load(f)
-                print(f"  ✅ Over {threshold}: {league_name}")
+                print(f"  ✅ Over {threshold}: {file_suffix}")
             except Exception as e:
                 print(f"  ❌ Error cargando Over {threshold}: {e}")
 
@@ -279,18 +295,29 @@ class ModelManagerOverUnderGoals:
         for league_id in ["8", "17", "23"]:
             print(f"  Liga {league_id}:")
             self.load_models(league_id)
+        # Qualy — un único modelo compartido por 11 y 16
+        print(f"  Qualy ({QUALY_LEAGUE_SLUG}):")
+        self.load_models("11")
+        # Reusar el mismo dict para el league_id 16
+        if "11" in self.league_models:
+            self.league_models["16"] = self.league_models["11"]
         print("✅ Modelos Over/Under cargados")
 
-    def predict_over_under(self, home_team: str, away_team: str, year: str, league_id: str) -> dict:
+    def predict_over_under(self, home_team: str, away_team: str, year: str, league_id: str,
+                           prebuilt_features: np.ndarray = None) -> dict:
         """
         Predice probabilidades Over/Under para umbrales 0.5, 1.5, 2.5, 3.5
         con restricción monotónica: P(>0.5) >= P(>1.5) >= P(>2.5) >= P(>3.5)
-        """
-        # Reutilizar features de 1X2
-        features = build_features_1x2(home_team, away_team, year, league_id)
 
-        if features.shape[1] > 40:
-            features = features[:, :40]
+        prebuilt_features: si se pasa, se usa directamente (útil para qualy leagues
+        donde el vector ya tiene la dimensión correcta incluyendo is_qualifier).
+        """
+        if prebuilt_features is not None:
+            features = prebuilt_features  # Dimensión correcta para el modelo
+        else:
+            features = build_features_1x2(home_team, away_team, year, league_id)
+            if features.shape[1] > 40:
+                features = features[:, :40]
 
         if features.ndim == 3:
             features = features.reshape(1, -1)
@@ -336,15 +363,18 @@ class ModelManagerSaves:
     Arquitectura: 9 modelos RF por liga con feature is_home.
     """
 
-    def __init__(self, league_id: str = "8"):
+    def __init__(self, league_id: str = "8", dir_name: str = None, file_suffix: str = None):
         """
         Inicializa el gestor de modelos de saves para una liga.
 
         Args:
-            league_id: ID de la liga ('8', '17', '23')
+            league_id: ID de la liga ('8', '17', '23', '11', '16', ...)
+            dir_name: Nombre del directorio bajo production/ (por defecto se infiere de league_id)
+            file_suffix: Sufijo en el nombre del fichero pkl (por defecto igual a dir_name)
         """
         self.league_id = league_id
-        self.league_name = LEAGUE_NAMES_NORMALIZED.get(LEAGUES.get(league_id, ''), 'unknown')
+        self.league_name = dir_name or LEAGUE_NAMES_NORMALIZED.get(LEAGUES.get(league_id, ''), 'unknown')
+        self.file_suffix = file_suffix or self.league_name
 
         # Thresholds disponibles
         self.thresholds = SAVES_THRESHOLDS
@@ -361,14 +391,14 @@ class ModelManagerSaves:
         # Cache de modelos cargados
         self.models = {}
 
-        print(f"📊 ModelManagerSaves inicializado para {LEAGUES.get(league_id, 'unknown')}")
+        print(f"📊 ModelManagerSaves inicializado para {LEAGUES.get(league_id, self.league_name)}")
         self._load_models()
 
     def _load_models(self):
         """Carga todos los modelos de saves de la liga."""
         for threshold in self.thresholds:
             threshold_str = str(threshold).replace('.', '_')
-            model_filename = f"model_over_{threshold_str}_saves_{self.league_name}.pkl"
+            model_filename = f"model_over_{threshold_str}_saves_{self.file_suffix}.pkl"
             model_path = os.path.join(self.models_dir, model_filename)
 
             if os.path.exists(model_path):
@@ -489,15 +519,18 @@ class ModelManagerCorners:
     Arquitectura: 10 modelos RF por liga con feature is_home.
     """
 
-    def __init__(self, league_id: str = "8"):
+    def __init__(self, league_id: str = "8", dir_name: str = None, file_suffix: str = None):
         """
         Inicializa el gestor de modelos de corners para una liga.
 
         Args:
-            league_id: ID de la liga ('8', '17', '23')
+            league_id: ID de la liga ('8', '17', '23', '11', '16', ...)
+            dir_name: Nombre del directorio bajo production/ (por defecto se infiere de league_id)
+            file_suffix: Sufijo en el nombre del fichero pkl (por defecto igual a dir_name)
         """
         self.league_id = league_id
-        self.league_name = LEAGUE_NAMES_NORMALIZED.get(LEAGUES.get(league_id, ''), 'unknown')
+        self.league_name = dir_name or LEAGUE_NAMES_NORMALIZED.get(LEAGUES.get(league_id, ''), 'unknown')
+        self.file_suffix = file_suffix or self.league_name
 
         # Thresholds disponibles
         self.thresholds = CORNERS_THRESHOLDS
@@ -514,14 +547,14 @@ class ModelManagerCorners:
         # Cache de modelos cargados
         self.models = {}
 
-        print(f"⚽ ModelManagerCorners inicializado para {LEAGUES.get(league_id, 'unknown')}")
+        print(f"⚽ ModelManagerCorners inicializado para {LEAGUES.get(league_id, self.league_name)}")
         self._load_models()
 
     def _load_models(self):
         """Carga todos los modelos de corners de la liga."""
         for threshold in self.thresholds:
             threshold_str = str(threshold).replace('.', '_')
-            model_filename = f"model_over_{threshold_str}_corners_{self.league_name}.pkl"
+            model_filename = f"model_over_{threshold_str}_corners_{self.file_suffix}.pkl"
             model_path = os.path.join(self.models_dir, model_filename)
 
             if os.path.exists(model_path):
@@ -726,6 +759,12 @@ async def lifespan(app: FastAPI):
     try:
         for league_id in ["8", "17", "23"]:
             model_manager_saves[league_id] = ModelManagerSaves(league_id=league_id)
+        # Qualy — modelo compartido entre 11 y 16
+        qualy_saves = ModelManagerSaves(
+            league_id="11", dir_name=QUALY_LEAGUE_SLUG, file_suffix=QUALY_FILE_SUFFIX
+        )
+        model_manager_saves["11"] = qualy_saves
+        model_manager_saves["16"] = qualy_saves
         print("✅ Modelos Saves precargados para todas las ligas")
     except Exception as e:
         print(f"⚠️  Error cargando modelos Saves: {e}")
@@ -734,6 +773,12 @@ async def lifespan(app: FastAPI):
     try:
         for league_id in ["8", "17", "23"]:
             model_manager_corners[league_id] = ModelManagerCorners(league_id=league_id)
+        # Qualy — modelo compartido entre 11 y 16
+        qualy_corners = ModelManagerCorners(
+            league_id="11", dir_name=QUALY_LEAGUE_SLUG, file_suffix=QUALY_FILE_SUFFIX
+        )
+        model_manager_corners["11"] = qualy_corners
+        model_manager_corners["16"] = qualy_corners
         print("✅ Modelos Corners precargados para todas las ligas")
     except Exception as e:
         print(f"⚠️  Error cargando modelos Corners: {e}")
@@ -832,9 +877,11 @@ def get_match_confidence(probabilities: dict, elo_diff: float, league_id: str) -
 
     # Umbrales de GAP por liga (LaLiga más empates, Premier más definido)
     gap_thresholds = {
-        "8": {"very_high": 35, "high": 18, "medium": 7},  # LaLiga (más empates)
+        "8": {"very_high": 35, "high": 18, "medium": 7},   # LaLiga (más empates)
         "17": {"very_high": 31, "high": 15, "medium": 5},  # Premier (más definido)
-        "23": {"very_high": 33, "high": 17, "medium": 6}  # Serie A (intermedio)
+        "23": {"very_high": 33, "high": 17, "medium": 6},  # Serie A (intermedio)
+        "11": {"very_high": 30, "high": 15, "medium": 6},  # Qualy WC Europe
+        "16": {"very_high": 28, "high": 14, "medium": 5},  # World Cup (más definido, fase final)
     }
     thresholds = gap_thresholds.get(league_id, gap_thresholds["8"])
 
@@ -876,19 +923,25 @@ class PredictionRequest(BaseModel):
 
 @app.post("/predict")
 def predict(req: PredictionRequest):
-    # model_result, calibrated_model, label_encoder, feature_cols, elo_threshold, over_models = load_models(req.league_id)
     try:
-        # ── FEATURES PARA 1X2 (40 o 47 dimensiones según liga) ──
-        X_1x2 = build_features_1x2(req.home_team, req.away_team, req.year, req.league_id)
+        if req.league_id in QUALY_LEAGUES:
+            # Clasificatorias/torneos internacionales: 41 features (40 base + is_qualifier)
+            is_qualifier = QUALY_IS_QUALIFIER.get(req.league_id, 0)
+            X_1x2 = build_features_qualy(
+                req.home_team, req.away_team, req.year, req.league_id, is_qualifier
+            )
+            # Saves/corners también usan las 41 features (modelo entrenado con is_qualifier)
+            X_for_saves_corners = X_1x2
+        else:
+            # Ligas domésticas: 40 features (47 para Premier, truncado a 40 para saves/corners)
+            X_1x2 = build_features_1x2(req.home_team, req.away_team, req.year, req.league_id)
+            X_for_saves_corners = X_1x2[:, :40]
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error construyendo features: {e}")
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # ✅ EXTRAER SOLO LAS 40 FEATURES BASE (para saves/corners)
-    # ══════════════════════════════════════════════════════════════════════════
-    # Premier tiene 47 features, pero saves/corners solo necesitan las primeras 40
-    X_base_40 = X_1x2[:, :40]  # Tomar solo las primeras 40 columnas
+    # Alias histórico: X_base_40 sigue usándose en la sección de saves/corners
+    X_base_40 = X_for_saves_corners
 
     # ══════════════════════════════════════════════════════════════════════════
     # PREDICCIÓN 1X2 CON NUEVOS MODELOS (RF o Ensemble según liga)
@@ -919,8 +972,13 @@ def predict(req: PredictionRequest):
     # ══════════════════════════════════════════════════════════════════════════
     # OVER/UNDER GOALS
     # ══════════════════════════════════════════════════════════════════════════
-    result_proba_ou = model_manager_ou_goals.predict_over_under(home_team=req.home_team, away_team=req.away_team,
-                                                                year=req.year, league_id=req.league_id)
+    # Para ligas qualy pasamos X_1x2 ya construido (41 features) para evitar
+    # rebuild y para que el modelo reciba la dimensión correcta.
+    result_proba_ou = model_manager_ou_goals.predict_over_under(
+        home_team=req.home_team, away_team=req.away_team,
+        year=req.year, league_id=req.league_id,
+        prebuilt_features=X_1x2 if req.league_id in QUALY_LEAGUES else None
+    )
 
     # ══════════════════════════════════════════════════════════════════════════
     # SAVES (PARADAS DE PORTERO)

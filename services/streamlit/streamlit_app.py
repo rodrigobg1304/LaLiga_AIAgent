@@ -9,8 +9,8 @@ import plotly.graph_objects as go
 os.environ["CREWAI_DISABLE_TELEMETRY"] = "true"
 os.environ["OTEL_SDK_DISABLED"] = "true"
 
-from football_core.db import (get_teams, get_years, get_standings, get_team_results, get_goals_scored,
-                              get_teams_by_league)
+from football_core.db import (get_teams, get_years, get_years_by_league, get_standings,
+                              get_team_results, get_goals_scored, get_teams_by_league)
 from football_core.config import get_league_options
 from dotenv import load_dotenv
 
@@ -324,6 +324,11 @@ def cached_teams_by_league(league_id: str, season: str):
     return get_teams_by_league(league_id=league_id, season=season)
 
 
+@st.cache_data(ttl=3600)
+def cached_years_by_league(league_id: str):
+    return get_years_by_league(league_id=league_id)
+
+
 # ─────────────────────────────────────────────
 # SIDEBAR
 # ─────────────────────────────────────────────
@@ -351,8 +356,16 @@ if section == "Predicción":
     league_name = st.selectbox("Liga", list(league_options.keys()), key="league_select_pred")
     league_id = league_options[league_name]
 
-    # Filtrar equipos por liga
-    teams = cached_teams_by_league(league_id=league_id, season=year_global)
+    # Clasificatorias/torneos usan formato de año distinto (ej: "2026" en vez de "25/26")
+    _QUALY_LEAGUES = {"11", "16", "1", "27"}
+    if league_id in _QUALY_LEAGUES:
+        _league_years = cached_years_by_league(league_id)
+        pred_year = st.selectbox("Campaña", _league_years, key="pred_year_qualy") if _league_years else year_global
+    else:
+        pred_year = year_global
+
+    # Filtrar equipos por liga y temporada
+    teams = cached_teams_by_league(league_id=league_id, season=pred_year)
 
     col1, col2 = st.columns(2)
     with col1:
@@ -371,7 +384,7 @@ if section == "Predicción":
                     json={
                         "home_team": home_team,
                         "away_team": away_team,
-                        "year": year_global,
+                        "year": pred_year,
                         "league_id": league_id
                     },
                     timeout=30

@@ -5,7 +5,9 @@ from football_core.db import run_query, TABLE
 LEAGUES = {
     "8": "LaLiga",
     "17": "Premier League",
-    "23": "Serie A"
+    "23": "Serie A",
+    "11": "Qualy WC Europe",
+    "16": "World Cup",
 }
 
 

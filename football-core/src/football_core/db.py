@@ -112,6 +112,17 @@ def get_years() -> list[str]:
     return [row["Year"] for row in run_query(f"SELECT DISTINCT Year FROM {TABLE} ORDER BY Year DESC")]
 
 
+def get_years_by_league(league_id: str) -> list[str]:
+    """Devuelve las temporadas disponibles para una liga concreta."""
+    return [
+        row["Year"]
+        for row in run_query(
+            f"SELECT DISTINCT Year FROM {TABLE} WHERE LeagueId = %s ORDER BY Year DESC",
+            (league_id,)
+        )
+    ]
+
+
 def get_stats() -> list[str]:
     return [row["name"] for row in run_query(f"SELECT DISTINCT name FROM {TABLE} ORDER BY name ASC")]
 
