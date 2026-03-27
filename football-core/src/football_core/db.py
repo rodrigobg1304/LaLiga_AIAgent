@@ -695,6 +695,83 @@ def get_matches_with_saves(league_id: str, years: list) -> list:
     return run_query(sql, (league_id,))
 
 
+def get_team_clustering_features(
+    league_ids: list[str],
+    min_matches: int = 0,
+    years: Optional[list[str]] = None,
+) -> list[dict]:
+    """
+    Returns one row per team with averaged stats across all matches in the given leagues.
+    Combines home and away appearances. Used for clustering analysis.
+
+    min_matches: exclude teams with fewer total appearances than this threshold.
+    years: optional season filter (e.g. ['25/26']). None means all seasons.
+    """
+    if not league_ids:
+        return []
+    placeholders = ",".join(["%s"] * len(league_ids))
+    year_filter = ""
+    year_params: list = []
+    if years:
+        year_placeholders = ",".join(["%s"] * len(years))
+        year_filter = f"AND Year IN ({year_placeholders})"
+        year_params = list(years)
+
+    sql = f"""
+        SELECT
+            team,
+            COUNT(*) AS match_count,
+            AVG(goals)           AS avg_goals,
+            AVG(shots_on_target) AS avg_shots_on_target,
+            AVG(total_shots)     AS avg_total_shots,
+            AVG(ball_possession) AS avg_ball_possession,
+            AVG(gk_saves)        AS avg_gk_saves,
+            AVG(big_chances)     AS avg_big_chances,
+            AVG(accurate_passes) AS avg_accurate_passes,
+            AVG(tackles_won)     AS avg_tackles_won,
+            AVG(interceptions)   AS avg_interceptions,
+            AVG(blocked_shots)   AS avg_blocked_shots
+        FROM (
+            SELECT homeTeam AS team, matchId,
+                MAX(CASE WHEN name='Goals'            AND period IN ('1ST','2ND') THEN CAST(homeValue AS DECIMAL) END) AS goals,
+                MAX(CASE WHEN name='Shots on target'  AND period IN ('1ST','2ND') THEN CAST(homeValue AS DECIMAL) END) AS shots_on_target,
+                MAX(CASE WHEN name='Total shots'      AND period IN ('1ST','2ND') THEN CAST(homeValue AS DECIMAL) END) AS total_shots,
+                MAX(CASE WHEN name='Ball possession'  AND period IN ('1ST','2ND') THEN CAST(homeValue AS DECIMAL) END) AS ball_possession,
+                MAX(CASE WHEN name='Goalkeeper saves' AND period IN ('1ST','2ND') THEN CAST(homeValue AS DECIMAL) END) AS gk_saves,
+                MAX(CASE WHEN name='Big chances'      AND period IN ('1ST','2ND') THEN CAST(homeValue AS DECIMAL) END) AS big_chances,
+                MAX(CASE WHEN name='Accurate passes'  AND period IN ('1ST','2ND') THEN CAST(homeValue AS DECIMAL) END) AS accurate_passes,
+                MAX(CASE WHEN name='Tackles won'      AND period IN ('1ST','2ND') THEN CAST(homeValue AS DECIMAL) END) AS tackles_won,
+                MAX(CASE WHEN name='Interceptions'    AND period IN ('1ST','2ND') THEN CAST(homeValue AS DECIMAL) END) AS interceptions,
+                MAX(CASE WHEN name='Blocked shots'    AND period IN ('1ST','2ND') THEN CAST(homeValue AS DECIMAL) END) AS blocked_shots
+            FROM {TABLE}
+            WHERE LeagueId IN ({placeholders}) {year_filter}
+            GROUP BY matchId, homeTeam
+
+            UNION ALL
+
+            SELECT awayTeam AS team, matchId,
+                MAX(CASE WHEN name='Goals'            AND period IN ('1ST','2ND') THEN CAST(awayValue AS DECIMAL) END) AS goals,
+                MAX(CASE WHEN name='Shots on target'  AND period IN ('1ST','2ND') THEN CAST(awayValue AS DECIMAL) END) AS shots_on_target,
+                MAX(CASE WHEN name='Total shots'      AND period IN ('1ST','2ND') THEN CAST(awayValue AS DECIMAL) END) AS total_shots,
+                MAX(CASE WHEN name='Ball possession'  AND period IN ('1ST','2ND') THEN CAST(awayValue AS DECIMAL) END) AS ball_possession,
+                MAX(CASE WHEN name='Goalkeeper saves' AND period IN ('1ST','2ND') THEN CAST(awayValue AS DECIMAL) END) AS gk_saves,
+                MAX(CASE WHEN name='Big chances'      AND period IN ('1ST','2ND') THEN CAST(awayValue AS DECIMAL) END) AS big_chances,
+                MAX(CASE WHEN name='Accurate passes'  AND period IN ('1ST','2ND') THEN CAST(awayValue AS DECIMAL) END) AS accurate_passes,
+                MAX(CASE WHEN name='Tackles won'      AND period IN ('1ST','2ND') THEN CAST(awayValue AS DECIMAL) END) AS tackles_won,
+                MAX(CASE WHEN name='Interceptions'    AND period IN ('1ST','2ND') THEN CAST(awayValue AS DECIMAL) END) AS interceptions,
+                MAX(CASE WHEN name='Blocked shots'    AND period IN ('1ST','2ND') THEN CAST(awayValue AS DECIMAL) END) AS blocked_shots
+            FROM {TABLE}
+            WHERE LeagueId IN ({placeholders}) {year_filter}
+            GROUP BY matchId, awayTeam
+        ) AS team_matches
+        GROUP BY team
+        HAVING match_count >= %s
+        ORDER BY team ASC
+    """
+    params = list(league_ids) + year_params + list(league_ids) + year_params + [min_matches]
+    return run_query(sql, tuple(params))
+
+
 def get_matches_with_corners(league_id: str, years: list) -> list:
     years_str = "', '".join(years)
     sql = f"""

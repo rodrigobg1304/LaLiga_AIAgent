@@ -8,6 +8,24 @@ LEAGUES = {
     "23": "Serie A",
     "11": "Qualy WC Europe",
     "16": "World Cup",
+    "295": "Qualy WC Conmebol",
+    "140": "Qualy WC Concacaf",
+}
+
+# Agrupaciones para la sección de clustering
+CLUB_LEAGUES = {
+    "8": "LaLiga",
+    "17": "Premier League",
+    "23": "Serie A",
+}
+
+NATIONAL_TEAM_LEAGUES = {
+    "11": "Qualy WC Europe",
+    "16": "World Cup",
+    "295": "Qualy WC Conmebol",
+    "140": "Qualy WC Concacaf",
+    "27": "Qualy Euro",
+    "1": "Eurocopa",
 }
 
 

@@ -13,8 +13,10 @@ from football_core.db import (run_query, TABLE, get_all_matches_chronological, g
                               get_team_season_count as db_get_team_season_count,
                               get_team_recent_matches_goals, get_h2h_matches, get_proxy_h2h_matches,
                               get_team_stat_average, get_team_multiple_stats_average,
-                              get_team_win_rates, get_team_goals_conceded_average, get_team_matches_total_goals)
+                              get_team_win_rates, get_team_goals_conceded_average, get_team_matches_total_goals,
+                              get_teams_by_league)
 from football_core.feature_engineering import build_features_1x2, build_features_qualy, warm_cache
+from tournament_simulation import run_simulation, build_probability_matrix
 
 from football_core.constants import (
     FEATURES,
@@ -51,11 +53,16 @@ MODEL_OVER_UNDER_GOALS_LALIGA = os.path.join(MODEL_OVER_UNDER_GOALS, "laliga")
 MODEL_OVER_UNDER_GOALS_PREMIER = os.path.join(MODEL_OVER_UNDER_GOALS, "premier_league")
 MODEL_OVER_UNDER_GOALS_SERIEA = os.path.join(MODEL_OVER_UNDER_GOALS, "serie_a")
 
-# ── Clasificatorias/Torneos internacionales (World Cup Europe) ──
-QUALY_LEAGUES = {'11', '16'}          # 11=Qualy WC Europe, 16=World Cup
-QUALY_LEAGUE_SLUG = 'worldcup_europe'
+# ── Clasificatorias/Torneos internacionales (modelo universal Mundial) ──
+QUALY_LEAGUES = {'11', '16', '295', '140'}  # Europe, World Cup, Conmebol, Concacaf
+QUALY_LEAGUE_SLUG = 'worldcup_all'
 QUALY_FILE_SUFFIX = 'qualy'
-QUALY_IS_QUALIFIER = {'11': 1, '16': 0}   # 1 = clasificatoria, 0 = torneo
+QUALY_IS_QUALIFIER = {
+    '11': 1,   # Qualy WC Europe — clasificatoria (terreno propio)
+    '295': 1,  # Qualy WC Conmebol — clasificatoria (terreno propio)
+    '140': 1,  # Qualy WC Concacaf — clasificatoria (terreno propio)
+    '16': 0,   # World Cup — torneo en terreno neutral
+}
 MODEL_1X2_QUALY = os.path.join(MODEL_1X2, QUALY_LEAGUE_SLUG)
 MODEL_OVER_UNDER_GOALS_QUALY = os.path.join(MODEL_OVER_UNDER_GOALS, QUALY_LEAGUE_SLUG)
 
@@ -134,7 +141,7 @@ class ModelManager1X2:
                 qualy_model = pickle.load(f)
             for lid in QUALY_LEAGUES:
                 self.models[lid] = {'type': 'rf', 'model': qualy_model}
-            print(f"  ✅ Qualy WC Europe + World Cup: RF cargado ({QUALY_LEAGUE_SLUG})")
+            print(f"  ✅ Qualy WC (Europe + Conmebol + Concacaf): RF cargado ({QUALY_LEAGUE_SLUG})")
 
         print("✅ Modelos 1X2 cargados exitosamente")
 
@@ -182,7 +189,10 @@ class ModelManager1X2:
             probas_ml = (rf_weight * rf_probas) + (xgb_weight * xgb_probas)
 
         # ── PASO 2: PROBABILIDADES BASADAS EN ELO PURO ──
-        probas_elo = elo_to_probabilities(elo_diff)  # Shape: (3,)
+        # Torneos en terreno neutral (Mundial, Eurocopa): sin ventaja local
+        _NEUTRAL_LEAGUES = {"16", "1"}
+        _home_adv = 0 if league_id in _NEUTRAL_LEAGUES else 100
+        probas_elo = elo_to_probabilities(elo_diff, home_advantage=_home_adv)  # Shape: (3,)
 
         # ── PASO 3: CALCULAR PESOS DINÁMICOS ──
         # Cuanto mayor |elo_diff|, más confiamos en Elo
@@ -759,12 +769,12 @@ async def lifespan(app: FastAPI):
     try:
         for league_id in ["8", "17", "23"]:
             model_manager_saves[league_id] = ModelManagerSaves(league_id=league_id)
-        # Qualy — modelo compartido entre 11 y 16
+        # Qualy — modelo compartido entre todos los leagues internacionales del Mundial
         qualy_saves = ModelManagerSaves(
             league_id="11", dir_name=QUALY_LEAGUE_SLUG, file_suffix=QUALY_FILE_SUFFIX
         )
-        model_manager_saves["11"] = qualy_saves
-        model_manager_saves["16"] = qualy_saves
+        for lid in QUALY_LEAGUES:
+            model_manager_saves[lid] = qualy_saves
         print("✅ Modelos Saves precargados para todas las ligas")
     except Exception as e:
         print(f"⚠️  Error cargando modelos Saves: {e}")
@@ -773,15 +783,31 @@ async def lifespan(app: FastAPI):
     try:
         for league_id in ["8", "17", "23"]:
             model_manager_corners[league_id] = ModelManagerCorners(league_id=league_id)
-        # Qualy — modelo compartido entre 11 y 16
+        # Qualy — modelo compartido entre todos los leagues internacionales del Mundial
         qualy_corners = ModelManagerCorners(
             league_id="11", dir_name=QUALY_LEAGUE_SLUG, file_suffix=QUALY_FILE_SUFFIX
         )
-        model_manager_corners["11"] = qualy_corners
-        model_manager_corners["16"] = qualy_corners
+        for lid in QUALY_LEAGUES:
+            model_manager_corners[lid] = qualy_corners
         print("✅ Modelos Corners precargados para todas las ligas")
     except Exception as e:
         print(f"⚠️  Error cargando modelos Corners: {e}")
+
+    # ── PRE-CALENTAR MATRIZ DE PROBABILIDADES PARA SIMULACIÓN ──
+    print("🚀 Pre-calentando matriz de probabilidades para simulación de torneo...")
+    try:
+        wc_model_entry = model_manager_1x2.models.get("16")
+        if wc_model_entry:
+            wc_teams: set = set()
+            for lid in QUALY_LEAGUES:
+                wc_teams.update(get_teams_by_league(league_id=lid))
+            wc_teams_list = sorted(wc_teams)
+            build_probability_matrix(wc_teams_list, wc_model_entry["model"], year=None)
+            print(f"  ✅ Matriz precalculada para {len(wc_teams_list)} selecciones")
+        else:
+            print("  ⚠️  Modelo worldcup_all no disponible, saltando precalentamiento")
+    except Exception as e:
+        print(f"⚠️  Error precalentando matriz de simulación: {e}")
 
     print("✅ Precarga completada. API lista.")
     yield
@@ -1030,6 +1056,47 @@ def predict(req: PredictionRequest):
         "over_under_goals": result_proba_ou,
         "saves": saves_predictions,
         "corners": corners_predictions
+    }
+
+
+# ─────────────────────────────────────────────
+# SIMULATION ENDPOINT
+# ─────────────────────────────────────────────
+
+class SimulationRequest(BaseModel):
+    teams: list[str]
+    n_simulations: int = 10_000
+    groups: Optional[dict] = None   # {group_name: [t1, t2, t3, t4]} — None = random draw
+
+
+@app.post("/simulate")
+def simulate(req: SimulationRequest):
+    """
+    Monte Carlo WC tournament simulation.
+    Returns win probabilities for each team (top-10 sorted by probability DESC).
+    Uses the worldcup_all qualy model (league_id='16', neutral ground).
+    """
+    model_entry = model_manager_1x2.models.get("16")
+    if model_entry is None:
+        raise HTTPException(status_code=503, detail="Modelo worldcup_all no disponible")
+
+    raw_model = model_entry["model"]
+
+    try:
+        probs = run_simulation(
+            teams=req.teams,
+            model=raw_model,
+            n_simulations=req.n_simulations,
+            groups=req.groups,
+            year=None,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error en simulación: {e}")
+
+    sorted_probs = sorted(probs.items(), key=lambda x: x[1], reverse=True)
+    return {
+        "n_simulations": req.n_simulations,
+        "results": [{"team": t, "win_probability": round(p * 100, 2)} for t, p in sorted_probs],
     }
 
 

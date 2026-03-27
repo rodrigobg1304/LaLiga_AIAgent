@@ -227,6 +227,14 @@ def _get_train_test_masks(df: pd.DataFrame, test_season) -> tuple:
 # ─────────────────────────────────────────────
 
 def calculate_elo(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Calcula Elo dual (home/away) con tratamiento diferenciado para terreno neutral.
+
+    - Clasificatorias (is_qualifier=1): Elo rol-específico (home juega en casa, away fuera).
+    - Torneos en terreno neutral (is_qualifier=0, ej: Mundial, Eurocopa): se usa el
+      promedio de los dos ratings de cada equipo, y la actualización se aplica por igual
+      a ambos ratings para no distorsionar el Elo con un rol que no tiene significado.
+    """
     elo_ratings: dict = {}
     elo_home_list, elo_away_list, elo_diff_list = [], [], []
     current_season = None
@@ -234,6 +242,7 @@ def calculate_elo(df: pd.DataFrame) -> pd.DataFrame:
     for _, row in df.iterrows():
         home, away = row['home_team'], row['away_team']
         season, result = row['season'], row['result']
+        is_neutral = (int(row.get('is_qualifier', 1)) == 0)
 
         if current_season is None:
             current_season = season
@@ -247,16 +256,33 @@ def calculate_elo(df: pd.DataFrame) -> pd.DataFrame:
             if team not in elo_ratings:
                 elo_ratings[team] = {'home': ELO_INITIAL, 'away': ELO_INITIAL}
 
-        elo_h = elo_ratings[home]['home']
-        elo_a = elo_ratings[away]['away']
+        if is_neutral:
+            # Terreno neutral: usar rating promedio de cada selección
+            elo_h = (elo_ratings[home]['home'] + elo_ratings[home]['away']) / 2
+            elo_a = (elo_ratings[away]['home'] + elo_ratings[away]['away']) / 2
+        else:
+            # Clasificatoria: rol importa (juegan en su estadio o fuera)
+            elo_h = elo_ratings[home]['home']
+            elo_a = elo_ratings[away]['away']
+
         elo_home_list.append(elo_h)
         elo_away_list.append(elo_a)
         elo_diff_list.append(elo_h - elo_a)
 
         exp_h = 1 / (1 + 10 ** ((elo_a - elo_h) / ELO_SCALE))
         actual_h = 1.0 if result == '1' else (0.5 if result == 'X' else 0.0)
-        elo_ratings[home]['home'] += ELO_K * (actual_h - exp_h)
-        elo_ratings[away]['away'] += ELO_K * ((1 - actual_h) - (1 - exp_h))
+        delta_h = ELO_K * (actual_h - exp_h)
+        delta_a = ELO_K * ((1 - actual_h) - (1 - exp_h))
+
+        if is_neutral:
+            # Actualizar ambos ratings por igual (no hay diferenciación de rol)
+            elo_ratings[home]['home'] += delta_h
+            elo_ratings[home]['away'] += delta_h
+            elo_ratings[away]['home'] += delta_a
+            elo_ratings[away]['away'] += delta_a
+        else:
+            elo_ratings[home]['home'] += delta_h
+            elo_ratings[away]['away'] += delta_a
 
     df = df.copy()
     df['elo_home'] = elo_home_list

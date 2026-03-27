@@ -110,6 +110,8 @@ LEAGUES = {
     '23': 'Serie A',
     '11': 'Qualy WC Europe',
     '16': 'World Cup',
+    '295': 'Qualy WC Conmebol',
+    '140': 'Qualy WC Concacaf',
 }
 
 # ── Ligas domésticas ──────────────────────────────────────────────────────────
@@ -129,11 +131,13 @@ SOFASCORE_TOURNAMENTS_REGULAR: dict[str, str] = {
 
 # ── Torneos/Clasificatorias internacionales (cada 4 años) ────────────────────
 SOFASCORE_TOURNAMENTS_QUALIFIER: dict[str, str] = {
-    '1':  'Eurocopa',
-    '27': 'Qualy_Euro',
-    '16':  'WorldCup',
-    '11': 'Qualy_WorldCup_Europe',
-    # 'XXX': 'CopaAmerica',
+    '1'  : 'Eurocopa',
+    '27' : 'Qualy_Euro',
+    '16' : 'WorldCup',
+    '11' : 'Qualy_WorldCup_Europe',
+    '295': 'Qualy_WorldCup_Conmebol',
+    '13' : 'Qualy_WorldCup_CAF',
+    '140': 'Qualy_WorldCup_Concacaf',
 }
 
 # ── Combinado — usado por sofascore_client.py como league_dict ────────────────
@@ -147,13 +151,16 @@ SOFASCORE_ALL: dict[str, str] = {
 # Usadas para calcular MatchDateLocal a partir del timestamp UTC de Sofascore.
 # Los torneos usan la zona horaria del país sede del evento.
 LEAGUE_TIMEZONES: dict[str, str] = {
-    '8':  'Europe/Madrid',   # LaLiga
-    '17': 'Europe/London',   # Premier League
-    '23': 'Europe/Rome',     # Serie A
-    '1':  'Europe/Berlin',   # Eurocopa (sede Germany 2024)
-    '27': 'Europe/Madrid',   # Qualy Euro (partidos en España principalmente)
-    '11': 'Europe/Madrid',   # Qualy WorldCup Euro (partidos en España principalmente)
-    '16': 'Europe/Madrid',    # WorldCup (sede cambia elegimos España)
+    '1'  : 'Europe/Berlin',       # Eurocopa (sede Germany 2024)
+    '8'  : 'Europe/Madrid',       # LaLiga
+    '11' : 'Europe/Madrid',       # Clasificación WorldCup Euro (Elegimos España)
+    '13' : 'Africa/Cairo',        # Clasificación WorldCup Africa (Elegimos El Cairo)
+    '16' : 'Europe/Madrid',       # WorldCup (sede cambia elegimos España)
+    '17' : 'Europe/London',       # Premier League
+    '23' : 'Europe/Rome',         # Serie A
+    '27' : 'Europe/Madrid',       # Clasificación Euro (partidos en España principalmente)
+    '140': 'America/Mexico_City', # Clasificación WorldCup Concacaf (Elegimos Mexico)
+    '295': 'America/Bogota',      # Clasificación WorldCup Sudamérica (Elegimos Bogotá)
 }
 
 # Normalización de nombres (para rutas de archivos)
@@ -161,8 +168,10 @@ LEAGUE_NAMES_NORMALIZED = {
     'LaLiga': 'laliga',
     'Premier League': 'premier_league',
     'Serie A': 'serie_a',
+    'World Cup': 'worldcup',
     'Qualy WC Europe': 'worldcup_europe',
-    'World Cup': 'worldcup_europe',
+    'Qualy WC Conmebol': 'worldcup_conmebol',
+    'Qualy WC CAF': 'worldcup_caf',
 }
 
 # ═══════════════════════════════════════════════════════════

@@ -12,6 +12,7 @@ RUN pip install --no-cache-dir --progress-bar off -r requirements.txt
 
 # Copy prediction service code
 COPY services/prediction/predict.py .
+COPY services/prediction/tournament_simulation.py .
 
 ENV MODELS_DIR=/app/models
 

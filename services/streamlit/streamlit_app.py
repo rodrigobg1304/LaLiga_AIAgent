@@ -10,8 +10,9 @@ os.environ["CREWAI_DISABLE_TELEMETRY"] = "true"
 os.environ["OTEL_SDK_DISABLED"] = "true"
 
 from football_core.db import (get_teams, get_years, get_years_by_league, get_standings,
-                              get_team_results, get_goals_scored, get_teams_by_league)
-from football_core.config import get_league_options
+                              get_team_results, get_goals_scored, get_teams_by_league,
+                              get_team_clustering_features)
+from football_core.config import get_league_options, CLUB_LEAGUES, NATIONAL_TEAM_LEAGUES
 from dotenv import load_dotenv
 
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
@@ -329,6 +330,15 @@ def cached_years_by_league(league_id: str):
     return get_years_by_league(league_id=league_id)
 
 
+@st.cache_data(ttl=3600)
+def cached_simulation_teams(league_ids: tuple) -> list:
+    """Carga equipos de varias ligas (sin filtro de temporada) para simulación."""
+    teams_set = set()
+    for lid in league_ids:
+        teams_set.update(get_teams_by_league(league_id=lid, season=None))
+    return sorted(teams_set)
+
+
 # ─────────────────────────────────────────────
 # SIDEBAR
 # ─────────────────────────────────────────────
@@ -338,11 +348,24 @@ with st.sidebar:
     st.markdown("---")
     section = st.radio(
         "Navegación",
-        ["Predicción", "Estadísticas", "Clasificación"],
+        ["Predicción", "Estadísticas", "Clasificación", "Estilos de Juego", "Simulación"],
         label_visibility="collapsed"
     )
     st.markdown("---")
-    year_global = st.selectbox("Temporada", cached_years())
+    _all_league_options = cached_league_options()
+    _league_names = list(_all_league_options.keys())
+    _default_league_idx = _league_names.index("LaLiga") if "LaLiga" in _league_names else 0
+    league_name = st.selectbox("Competición", _league_names, index=_default_league_idx, key="league_global")
+    league_id = _all_league_options[league_name]
+
+    _QUALY_LEAGUES = {"11", "16", "1", "27", "295"}
+    _league_years = cached_years_by_league(league_id)
+    _season_label = "Campaña" if league_id in _QUALY_LEAGUES else "Temporada"
+    year_global = (
+        st.selectbox(_season_label, _league_years, key="year_global")
+        if _league_years
+        else ("2026" if league_id in _QUALY_LEAGUES else "25/26")
+    )
 
 # ─────────────────────────────────────────────
 # SECCIÓN: PREDICCIÓN
@@ -352,30 +375,20 @@ if section == "Predicción":
     st.markdown("### Predicción 1X2")
     st.markdown('<div class="section-title">Selecciona los equipos</div>', unsafe_allow_html=True)
 
-    league_options = cached_league_options()
-    league_name = st.selectbox("Liga", list(league_options.keys()), key="league_select_pred")
-    league_id = league_options[league_name]
+    teams = cached_teams_by_league(league_id=league_id, season=year_global)
 
-    # Clasificatorias/torneos usan formato de año distinto (ej: "2026" en vez de "25/26")
-    _QUALY_LEAGUES = {"11", "16", "1", "27"}
-    if league_id in _QUALY_LEAGUES:
-        _league_years = cached_years_by_league(league_id)
-        pred_year = st.selectbox("Campaña", _league_years, key="pred_year_qualy") if _league_years else year_global
-    else:
-        pred_year = year_global
-
-    # Filtrar equipos por liga y temporada
-    teams = cached_teams_by_league(league_id=league_id, season=pred_year)
-
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
     with col1:
         home_team = st.selectbox("Local", teams, key="home")
     with col2:
         away_options = [t for t in teams if t != home_team]
         away_team = st.selectbox("Visitante", away_options, key="away")
+    with col3:
+        st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+        predict_clicked = st.button("Predecir", type="primary", width='stretch')
 
     # BOTÓN DE PREDICCIÓN - Solo guarda en session_state
-    if st.button("Predecir", type="primary", width='stretch'):
+    if predict_clicked:
         with st.spinner("Calculando predicción..."):
             try:
                 prediction_url = os.getenv("PREDICTION_URL", "http://localhost:8001")
@@ -384,7 +397,7 @@ if section == "Predicción":
                     json={
                         "home_team": home_team,
                         "away_team": away_team,
-                        "year": pred_year,
+                        "year": year_global,
                         "league_id": league_id
                     },
                     timeout=30
@@ -928,10 +941,6 @@ if section == "Predicción":
 
 elif section == "Estadísticas":
     st.markdown("### Estadísticas de equipo")
-    league_options = cached_league_options()
-    league_name = st.selectbox("Liga", list(league_options.keys()), key="league_select_stats")
-    league_id = league_options[league_name]
-
     teams = cached_teams_by_league(league_id=league_id, season=year_global)
     team = st.selectbox("Equipo", teams)
 
@@ -995,11 +1004,6 @@ elif section == "Estadísticas":
 
 elif section == "Clasificación":
     st.markdown("### Clasificación")
-
-    league_options = cached_league_options()
-    league_name = st.selectbox("Liga", list(league_options.keys()), key="league_select")
-    league_id = league_options[league_name]
-
     data = cached_standings(league=league_id, year=year_global)
 
     if data:
@@ -1055,3 +1059,280 @@ elif section == "Clasificación":
         st.markdown(html, unsafe_allow_html=True)
     else:
         st.info("No hay datos de clasificación para esta temporada.")
+
+
+# ─────────────────────────────────────────────
+# SECCIÓN: ESTILOS DE JUEGO (CLUSTERING)
+# ─────────────────────────────────────────────
+
+elif section == "Estilos de Juego":
+    import numpy as np
+    from sklearn.cluster import KMeans
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.decomposition import PCA
+
+    CLUSTER_LABELS = ["Dominadores Élite", "Equilibrados Sólidos", "Defensivos Organizados", "Intensidad Física"]
+    CLUSTER_COLORS = ["#E67E22", "#2C3E50", "#27AE60", "#8E44AD"]
+
+    CLUSTERING_FEATURES = [
+        "avg_goals", "avg_shots_on_target", "avg_total_shots", "avg_ball_possession",
+        "avg_gk_saves", "avg_big_chances", "avg_accurate_passes",
+        "avg_tackles_won", "avg_interceptions", "avg_blocked_shots",
+    ]
+
+    FEATURE_LABELS = {
+        "avg_goals": "Goles/partido",
+        "avg_shots_on_target": "Tiros a puerta/partido",
+        "avg_total_shots": "Tiros totales/partido",
+        "avg_ball_possession": "Posesión (%)",
+        "avg_gk_saves": "Paradas portero/partido",
+        "avg_big_chances": "Ocasiones claras/partido",
+        "avg_accurate_passes": "Pases precisos/partido",
+        "avg_tackles_won": "Entradas ganadas/partido",
+        "avg_interceptions": "Intercepciones/partido",
+        "avg_blocked_shots": "Tiros bloqueados/partido",
+    }
+
+    @st.cache_data(ttl=3600)
+    def cached_clustering_features(league_ids: tuple, min_matches: int, years: tuple = ()) -> list[dict]:
+        return get_team_clustering_features(list(league_ids), min_matches, list(years) if years else None)
+
+    def assign_cluster_labels(df: "pd.DataFrame", cluster_col: str = "cluster") -> "pd.DataFrame":
+        """Ordena los centroides por capacidad ofensiva (goles + tiros) y reasigna etiquetas."""
+        offensive_proxy = df.groupby(cluster_col)[["avg_goals", "avg_shots_on_target"]].mean().sum(axis=1)
+        rank = offensive_proxy.rank(ascending=False).astype(int) - 1
+        df["cluster_label"] = df[cluster_col].map(rank).map(lambda i: CLUSTER_LABELS[i])
+        df["cluster_color"] = df[cluster_col].map(rank).map(lambda i: CLUSTER_COLORS[i])
+        return df
+
+    def run_clustering(rows: list[dict], n_clusters: int) -> "pd.DataFrame":
+        df = pd.DataFrame(rows)
+        matrix = df[CLUSTERING_FEATURES].apply(pd.to_numeric, errors="coerce")
+        matrix = matrix.fillna(matrix.median())
+
+        scaler = StandardScaler()
+        scaled = scaler.fit_transform(matrix)
+
+        km = KMeans(n_clusters=n_clusters, random_state=42, n_init=20)
+        df["cluster"] = km.fit_predict(scaled)
+
+        pca = PCA(n_components=2, random_state=42)
+        coords = pca.fit_transform(scaled)
+        df["pc1"] = coords[:, 0]
+        df["pc2"] = coords[:, 1]
+
+        var = pca.explained_variance_ratio_
+        df = assign_cluster_labels(df)
+        return df, var
+
+    st.markdown("### Estilos de Juego")
+    st.markdown('<div class="section-title">Clasificación de equipos por perfil de juego · K-Means clustering</div>', unsafe_allow_html=True)
+
+    if league_id in NATIONAL_TEAM_LEAGUES:
+        league_ids_tuple = tuple(NATIONAL_TEAM_LEAGUES.keys())
+        years_tuple = ()
+        min_matches = 30
+        n_clusters = 4
+        context_label = "Selecciones (todos los torneos)"
+    else:
+        league_ids_tuple = (league_id,)
+        years_tuple = (year_global,)
+        min_matches = 5
+        n_clusters = 4
+        context_label = f"{league_name} · {year_global}"
+
+    rows = cached_clustering_features(league_ids_tuple, min_matches, years_tuple)
+
+    if len(rows) < n_clusters * 2:
+        st.warning(
+            f"Solo hay {len(rows)} equipos con suficientes partidos para clustering "
+            f"(mínimo recomendado: {n_clusters * 2}). Prueba con otra liga o reduce el filtro."
+        )
+    else:
+        df_clust, variance = run_clustering(rows, n_clusters)
+
+        # ── Scatter PCA ──────────────────────────────────────────────────
+        fig = go.Figure()
+
+        for label, color in zip(CLUSTER_LABELS, CLUSTER_COLORS):
+            subset = df_clust[df_clust["cluster_label"] == label]
+            if subset.empty:
+                continue
+            hover_text = [
+                f"<b>{row['team']}</b><br>"
+                + "<br>".join(
+                    f"{FEATURE_LABELS[f]}: {row[f]:.2f}"
+                    for f in CLUSTERING_FEATURES
+                    if pd.notna(row[f])
+                )
+                + f"<br><i>Partidos: {int(row['match_count'])}</i>"
+                for _, row in subset.iterrows()
+            ]
+            fig.add_trace(go.Scatter(
+                x=subset["pc1"],
+                y=subset["pc2"],
+                mode="markers+text",
+                name=label,
+                marker=dict(color=color, size=12, line=dict(width=1, color="#FFFFFF")),
+                text=subset["team"].str.replace("-", " ").str.title(),
+                textposition="top center",
+                textfont=dict(size=10, color="#2C3E50"),
+                hovertext=hover_text,
+                hoverinfo="text",
+            ))
+
+        fig.update_layout(
+            title=dict(
+                text=f"<b>Estilos de Juego · {context_label}</b>"
+                     f"<br><sup>PCA — varianza explicada: PC1 {variance[0]:.1%} · PC2 {variance[1]:.1%}</sup>",
+                font=dict(size=16, color="#2C3E50"),
+            ),
+            plot_bgcolor="#FDF6E3",
+            paper_bgcolor="#FDF6E3",
+            xaxis=dict(title="PC1 (componente ofensiva)", showgrid=True, gridcolor="#ECF0F1", zeroline=False),
+            yaxis=dict(title="PC2 (componente defensiva)", showgrid=True, gridcolor="#ECF0F1", zeroline=False),
+            legend=dict(
+                title="Cluster",
+                bgcolor="#FFFBF0",
+                bordercolor="#F39C12",
+                borderwidth=1,
+            ),
+            height=620,
+            margin=dict(t=90, b=40, l=40, r=40),
+        )
+        st.plotly_chart(fig, width='stretch')
+
+        # ── Tabla resumen de clusters ─────────────────────────────────────
+        st.markdown('<div class="section-title">Perfil medio por cluster</div>', unsafe_allow_html=True)
+
+        summary = (
+            df_clust.groupby("cluster_label")[CLUSTERING_FEATURES]
+            .mean()
+            .round(2)
+            .rename(columns=FEATURE_LABELS)
+            .reset_index()
+            .rename(columns={"cluster_label": "Cluster"})
+        )
+        st.dataframe(summary, width='stretch', hide_index=True)
+
+        # ── Detalle por cluster ───────────────────────────────────────────
+        st.markdown('<div class="section-title">Equipos por cluster</div>', unsafe_allow_html=True)
+        cols = st.columns(2)
+        for i, (label, color) in enumerate(zip(CLUSTER_LABELS, CLUSTER_COLORS)):
+            subset = df_clust[df_clust["cluster_label"] == label].sort_values("avg_goals", ascending=False)
+            if subset.empty:
+                continue
+            teams_list = "".join(
+                f"<li>{row['team'].replace('-', ' ').title()} <span style='color:#7F8C8D;font-size:11px'>({int(row['match_count'])} partidos)</span></li>"
+                for _, row in subset.iterrows()
+            )
+            card_html = (
+                f"<div class='card' style='border-color:{color}'>"
+                f"<b style='color:{color}'>{label}</b>"
+                f"<ul style='margin-top:8px;padding-left:18px;font-size:13px'>{teams_list}</ul>"
+                f"</div>"
+            )
+            cols[i % 2].markdown(card_html, unsafe_allow_html=True)
+
+# ─────────────────────────────────────────────
+# SECCIÓN: SIMULACIÓN
+# ─────────────────────────────────────────────
+
+elif section == "Simulación":
+    st.markdown("### Simulación de Torneo")
+    st.markdown('<div class="section-title">Monte Carlo · Probabilidad de ganar el torneo</div>', unsafe_allow_html=True)
+
+    # ── Opciones de torneo (solo WC 2026 por ahora) ────────────────────────────
+    SIMULATION_TOURNAMENTS = {
+        "World Cup 2026": {"league_ids": ["11", "295", "140", "16", "13"], "label": "WC 2026"},
+    }
+
+    col_left, col_right = st.columns([2, 1])
+
+    with col_left:
+        tournament_name = st.selectbox(
+            "Competición",
+            list(SIMULATION_TOURNAMENTS.keys()),
+            key="sim_tournament"
+        )
+
+    with col_right:
+        n_sim = st.selectbox(
+            "Simulaciones",
+            [1_000, 5_000, 10_000, 50_000],
+            index=2,
+            format_func=lambda x: f"{x:,}",
+            key="sim_n"
+        )
+
+    tournament_cfg = SIMULATION_TOURNAMENTS[tournament_name]
+    all_tournament_teams = cached_simulation_teams(tuple(tournament_cfg["league_ids"]))
+
+    selected_teams = st.multiselect(
+        "Equipos participantes",
+        options=all_tournament_teams,
+        default=all_tournament_teams,
+        key="sim_teams",
+        help="Edita la lista para reflejar la clasificación real. Se completa a 32 con equipos ficticios débiles si son menos."
+    )
+
+    st.caption(f"{len(selected_teams)} equipos seleccionados · Se simulan {n_sim:,} torneos")
+
+    simulate_clicked = st.button("Simular", type="primary", key="sim_run")
+
+    if simulate_clicked:
+        if len(selected_teams) < 4:
+            st.warning("Selecciona al menos 4 equipos para simular.")
+        else:
+            with st.spinner(f"Simulando {n_sim:,} torneos..."):
+                try:
+                    prediction_url = os.getenv("PREDICTION_URL", "http://localhost:8001")
+                    resp = requests.post(
+                        f"{prediction_url}/simulate",
+                        json={"teams": selected_teams, "n_simulations": n_sim},
+                        timeout=300
+                    )
+                    resp.raise_for_status()
+                    sim_data = resp.json()
+
+                    results = sim_data.get("results", [])
+                    top10 = results[:10]
+
+                    if not top10:
+                        st.warning("La simulación no devolvió resultados.")
+                    else:
+                        df_sim = pd.DataFrame(top10)
+                        df_sim.index = range(1, len(df_sim) + 1)
+                        df_sim.columns = ["Selección", "Probabilidad (%)"]
+
+                        col_table, col_chart = st.columns([1, 1])
+
+                        with col_table:
+                            st.markdown('<div class="section-title">Top 10 · Probabilidad de ganar</div>', unsafe_allow_html=True)
+                            st.dataframe(df_sim, width='stretch')
+
+                        with col_chart:
+                            fig = go.Figure(go.Bar(
+                                x=df_sim["Probabilidad (%)"],
+                                y=df_sim["Selección"],
+                                orientation="h",
+                                marker_color="#E67E22",
+                                text=[f"{p:.1f}%" for p in df_sim["Probabilidad (%)"]],
+                                textposition="outside",
+                            ))
+                            fig.update_layout(
+                                plot_bgcolor="#FDF6E3",
+                                paper_bgcolor="#FDF6E3",
+                                xaxis_title="Probabilidad (%)",
+                                yaxis=dict(autorange="reversed"),
+                                margin=dict(l=10, r=40, t=20, b=20),
+                                height=380,
+                                font=dict(family="DM Sans"),
+                            )
+                            st.plotly_chart(fig, width='stretch')
+
+                except requests.exceptions.ConnectionError:
+                    st.error("❌ No se puede conectar con el servidor de predicción.")
+                    st.info(f"Asegúrate de que el servidor ML está corriendo en {os.getenv('PREDICTION_URL', 'http://localhost:8001')}")
+                except Exception as e:
+                    st.error(f"❌ Error en la simulación: {str(e)}")
