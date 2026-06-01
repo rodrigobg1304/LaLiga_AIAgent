@@ -41,6 +41,8 @@ from football_core.constants import (
     FORM_WINDOW,
     H2H_LOOKBACK,
     MIN_H2H_MATCHES,
+    INTERNATIONAL_LEAGUE_IDS,
+    NEUTRAL_TEAM_STATS,
 )
 
 
@@ -85,17 +87,24 @@ def _build_elo_cache() -> dict:
 
 
 def get_elo(home_team: str, away_team: str) -> dict:
-    """Devuelve los Elos actuales desde caché."""
+    """Devuelve los Elos actuales desde caché.
+
+    El caché usa las claves exactas de la BD (slugs en minúsculas).
+    Se normaliza a minúsculas para evitar mismatches por capitalización.
+    """
     global _elo_cache, _elo_cache_time
 
     if not _elo_cache or (time.time() - _elo_cache_time) > _ELO_TTL_SECONDS:
         _elo_cache = _build_elo_cache()
         _elo_cache_time = time.time()
 
+    h = home_team.lower()
+    a = away_team.lower()
+
     return {
-        "elo_home": _elo_cache.get(home_team, 1500),
-        "elo_away": _elo_cache.get(away_team, 1500),
-        "elo_diff": _elo_cache.get(home_team, 1500) - _elo_cache.get(away_team, 1500),
+        "elo_home": _elo_cache.get(h, 1500),
+        "elo_away": _elo_cache.get(a, 1500),
+        "elo_diff": _elo_cache.get(h, 1500) - _elo_cache.get(a, 1500),
     }
 
 
@@ -182,9 +191,20 @@ _neighbors_cache = {}  # Cache: {(team, year, standings_tuple): [vecinos]}
 # ─────────────────────────────────────────────
 
 def get_recent_years(year: str, n: int = 2) -> list:
-    """Devuelve las últimas N temporadas incluyendo la actual."""
-    start = int(year.split("/")[0])
-    return [f"{start - i}/{str((start - i + 1) % 100).zfill(2)}" for i in range(n)]
+    """Devuelve las últimas N temporadas incluyendo la actual.
+
+    Soporta dos formatos:
+    - Doméstico: "25/26" → ["25/26", "24/25"]
+    - Internacional: "2026" → ["2026", "2022"] (ciclos de 4 años: WC, Euros)
+    """
+    if "/" in year:
+        start = int(year.split("/")[0])
+        return [f"{start - i}/{str((start - i + 1) % 100).zfill(2)}" for i in range(n)]
+    else:
+        # Formato de año completo (torneos internacionales: WC, Euros, etc.)
+        # Los ciclos son cada 4 años: 2026 → [2026, 2022, 2018]
+        start = int(year)
+        return [str(start - i * 4) for i in range(n)]
 
 
 # ─────────────────────────────────────────────
@@ -202,15 +222,49 @@ def get_team_stats_weighted(team: str, role: str, year: Optional[str],
     return float(RECENT_WEIGHT) * recent_avg + float(HISTORICAL_WEIGHT) * historical_avg
 
 
+def _neutral_team_features(role: str) -> dict:
+    """
+    Devuelve el vector de features neutras para un equipo sin datos históricos.
+    Coincide con los valores NEUTRAL del training script (train_qualy.py) para
+    que el modelo reciba inputs dentro de su distribución de entrenamiento.
+    """
+    n = NEUTRAL_TEAM_STATS
+    return {
+        f"{role}_avg_Goals":              n['goals_for_avg'],
+        f"{role}_avg_Ball possession":    n['possession_avg'],
+        f"{role}_avg_Total shots":        n['total_shots_avg'],
+        f"{role}_avg_Shots on target":    n['shots_on_target_avg'],
+        f"{role}_avg_Goalkeeper saves":   n['gk_saves_avg'],
+        f"{role}_avg_Big chances":        n['big_chances_avg'],
+        f"{role}_avg_Accurate passes":    n['accurate_passes_avg'],
+        f"{role}_avg_Tackles won":        n['tackles_won_avg'],
+        f"{role}_avg_Interceptions":      n['interceptions_avg'],
+        f"{role}_avg_Blocked shots":      n['blocked_shots_avg'],
+        f"{role}_avg_goals_scored":       n['goals_for_avg'],
+        f"{role}_avg_shots":              n['total_shots_avg'],
+        f"{role}_avg_big_chances":        n['big_chances_avg'],
+        f"{role}_avg_xG":                 0,
+        f"{role}_win_rate_{role}":        n['win_rate'],
+        f"{role}_draw_rate_{role}":       0.27,
+        f"{role}_loss_rate_{role}":       0.40,
+        f"{role}_form_pts":               n['points_avg'] * 5,
+        f"{role}_avg_goals_conceded_global": n['goals_against_avg'],
+    }
+
+
 def get_team_features(team: str, role: str, year: Optional[str], league_id: str, n: int = 5) -> dict:
     """Versión OPTIMIZADA: 2 queries en lugar de 18."""
     recent_years = get_recent_years(year) if year else []
 
     if not recent_years:
-        return {f"{role}_avg_{feat}": 0.0 for feat in FEATURES}
+        return _neutral_team_features(role)
 
     stats_hist = get_team_multiple_stats_average(team, role, recent_years, n=None)
     stats_recent = get_team_multiple_stats_average(team, role, recent_years, n=n)
+
+    # Sin datos en BD → fallback a valores neutros (evita que el modelo reciba ceros)
+    if not stats_hist and not stats_recent:
+        return _neutral_team_features(role)
 
     features = {}
 
@@ -262,12 +316,29 @@ def get_team_features_cached(team: str, role: str, year: Optional[str],
 
 
 def _get_form_features_inline(team: str, role: str, league_id: str, n: int, recent_years: list) -> dict:
-    """Helper interno para calcular win_rate, form_pts y goals_conceded."""
-    stats_hist_wr = get_team_win_rates(team, role, league_id, recent_years, n=None)
-    stats_recent_wr = get_team_win_rates(team, role, league_id, recent_years, n=n)
+    """Helper interno para calcular win_rate, form_pts y goals_conceded.
+
+    Para ligas internacionales consulta todos los torneos internacionales
+    combinados, ya que una selección puede tener datos en varias competiciones
+    (ej. Spain: liga 11 qualifying + liga 16 World Cup).
+    """
+    # Para internacionales, ampliar a todas las ligas de selecciones nacionales
+    if league_id in INTERNATIONAL_LEAGUE_IDS:
+        effective_leagues = list(INTERNATIONAL_LEAGUE_IDS)
+    else:
+        effective_leagues = league_id
+
+    stats_hist_wr = get_team_win_rates(team, role, effective_leagues, recent_years, n=None)
+    stats_recent_wr = get_team_win_rates(team, role, effective_leagues, recent_years, n=n)
+
+    neutral_wr = NEUTRAL_TEAM_STATS['win_rate']
+    neutral_draw = 0.27
+    neutral_loss = 0.40
 
     if stats_hist_wr["total"] == 0:
-        hist_win_rate = hist_draw_rate = hist_loss_rate = 0
+        hist_win_rate = neutral_wr
+        hist_draw_rate = neutral_draw
+        hist_loss_rate = neutral_loss
     else:
         total_hist = float(stats_hist_wr["total"])
         if role == "home":
@@ -280,8 +351,10 @@ def _get_form_features_inline(team: str, role: str, league_id: str, n: int, rece
             hist_loss_rate = float(stats_hist_wr["wins"]) / total_hist
 
     if stats_recent_wr["total"] == 0:
-        recent_win_rate = recent_draw_rate = recent_loss_rate = 0
-        form_pts = 0
+        recent_win_rate = neutral_wr
+        recent_draw_rate = neutral_draw
+        recent_loss_rate = neutral_loss
+        form_pts = NEUTRAL_TEAM_STATS['points_avg'] * 5
     else:
         total_recent = float(stats_recent_wr["total"])
         if role == "home":
@@ -297,13 +370,15 @@ def _get_form_features_inline(team: str, role: str, league_id: str, n: int, rece
 
     hist_conceded = get_team_goals_conceded_average(team, role, recent_years, n=None)
     recent_conceded = get_team_goals_conceded_average(team, role, recent_years, n=n)
+    neutral_conceded = NEUTRAL_TEAM_STATS['goals_against_avg']
 
     return {
         f"{role}_win_rate_{role}": WIN_RATE_RECENT_WEIGHT * recent_win_rate + WIN_RATE_HISTORICAL_WEIGHT * hist_win_rate,
         f"{role}_draw_rate_{role}": WIN_RATE_RECENT_WEIGHT * recent_draw_rate + WIN_RATE_HISTORICAL_WEIGHT * hist_draw_rate,
         f"{role}_loss_rate_{role}": WIN_RATE_RECENT_WEIGHT * recent_loss_rate + WIN_RATE_HISTORICAL_WEIGHT * hist_loss_rate,
         f"{role}_form_pts": form_pts,
-        f"{role}_avg_goals_conceded_global": float(RECENT_WEIGHT) * recent_conceded + float(HISTORICAL_WEIGHT) * hist_conceded,
+        f"{role}_avg_goals_conceded_global": float(RECENT_WEIGHT) * (recent_conceded or neutral_conceded)
+                                             + float(HISTORICAL_WEIGHT) * (hist_conceded or neutral_conceded),
     }
 
 
@@ -747,17 +822,16 @@ def build_features_qualy(home_team: str, away_team: str, year: Optional[str],
     """
     Construye el vector de features (41 dimensiones) para modelos de clasificatorias.
 
-    Las 40 features base son idénticas a build_features_1x2 pero se construyen con
-    year=None para evitar la discrepancia de formato entre ligas domésticas ("25/26")
-    y torneos internacionales ("2026").  El ELO sí se calcula correctamente porque
-    usa la caché global (independiente de year).
+    Las 40 features base son idénticas a build_features_1x2. Se pasa el año real
+    en formato internacional ("2026") para que get_recent_years lo detecte y genere
+    las temporadas correctas (ej: ["2026", "2022"]) al consultar la BD.
 
     Feature 41: is_qualifier (1 = partido de clasificatoria, 0 = torneo principal).
     """
-    # Construir las 40 features base usando year=None
+    # Construir las 40 features base con el año real (formato internacional "2026")
     # → ELO correcto (caché global incluye partidos internacionales)
-    # → Stats de equipo neutras (year=None → sin filtro de temporada → defaults)
-    # → H2H basado en todos los enfrentamientos históricos entre las selecciones
-    features_40 = build_features_1x2(home_team, away_team, year=None, league_id=league_id)
+    # → Stats de equipo desde BD filtradas por años del ciclo internacional
+    # → H2H basado en enfrentamientos históricos entre las selecciones
+    features_40 = build_features_1x2(home_team, away_team, year=year, league_id=league_id)
     is_q = np.array([[float(is_qualifier)]], dtype=np.float64)
     return np.hstack([features_40, is_q])

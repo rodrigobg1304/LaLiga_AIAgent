@@ -187,6 +187,46 @@ def collect_round_metadata(my_league, my_season, my_round, my_match_id=None) -> 
     return []
 
 
+def collect_round_fixtures(my_league, my_season, my_round) -> list[dict]:
+    """
+    Collect fixture metadata for ALL matches in a round (completed or not).
+    Useful for upcoming rounds where scores are not yet available.
+
+    For unplayed matches homeScore/awayScore may be absent — scores will be None.
+    Returns a list of dicts ready for insert_match_metadata().
+    """
+    get_seasons_dict_result(my_league)
+    matches_result = get_matches_by_round(my_league, my_season, my_round)
+    fixtures = []
+    for event in matches_result.json().get('events', []):
+        ts = event['startTimestamp']
+        match_date_utc = datetime.fromtimestamp(ts, tz=timezone.utc)
+        tz_str = LEAGUE_TIMEZONES.get(str(my_league))
+        match_date_local = (
+            match_date_utc.astimezone(ZoneInfo(tz_str)).strftime('%Y-%m-%d %H:%M:%S')
+            if tz_str else None
+        )
+        home_score = event.get('homeScore', {})
+        away_score = event.get('awayScore', {})
+        fixtures.append({
+            'MatchId':        event['id'],
+            'LeagueId':       my_league,
+            'SeasonId':       event['season']['id'] if 'season' in event else None,
+            'Round':          str(my_round),
+            'homeTeam':       event['homeTeam']['slug'],
+            'awayTeam':       event['awayTeam']['slug'],
+            'MatchDate':      match_date_utc.strftime('%Y-%m-%d %H:%M:%S'),
+            'MatchDateLocal': match_date_local,
+            'homeScore':      home_score.get('normaltime'),
+            'awayScore':      away_score.get('normaltime'),
+            'homeScoreET':    home_score.get('overtime'),
+            'awayScoreET':    away_score.get('overtime'),
+            'homeScorePen':   home_score.get('penalties'),
+            'awayScorePen':   away_score.get('penalties'),
+        })
+    return fixtures
+
+
 def _build_match_statistics_df(event, my_league, my_round, season_year):
     """
     Internal helper. Builds the statistics DataFrame for a single completed event dict.

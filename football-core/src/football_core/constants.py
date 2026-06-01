@@ -192,3 +192,36 @@ MODEL_1X2_PREMIER = os.path.join(MODEL_BASE_DIR, "models", "1x2", "production", 
 
 SAVES_THRESHOLDS = [0.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5]
 CORNERS_THRESHOLDS = [2.5, 3.5, 4.5, 5.5, 6.5, 7.5, 8.5, 9.5]
+
+# ═══════════════════════════════════════════════════════════
+# LIGAS INTERNACIONALES — IDs de selecciones nacionales
+# ═══════════════════════════════════════════════════════════
+
+# Todos los IDs de torneos internacionales/clasificatorias.
+# Para equipos nacionales, get_team_win_rates debe consultar TODOS estos
+# en lugar de uno solo, porque una selección puede tener datos en varias
+# competiciones (ej. Spain: liga 11 qualifying + liga 16 World Cup).
+INTERNATIONAL_LEAGUE_IDS = {'11', '16', '295', '140', '1', '27', '13'}
+
+# ═══════════════════════════════════════════════════════════
+# NEUTRAL FEATURES — Valores de referencia para selecciones sin datos
+# ═══════════════════════════════════════════════════════════
+
+# Coinciden exactamente con los valores NEUTRAL del training script (train_qualy.py).
+# Se usan como fallback cuando la BD no devuelve stats para un equipo nacional,
+# evitando que el modelo reciba ceros (fuera de la distribución de entrenamiento).
+NEUTRAL_TEAM_STATS = {
+    'win_rate': 0.33,
+    'goals_for_avg': 1.5,
+    'goals_against_avg': 1.5,
+    'points_avg': 1.0,          # form_pts / 5.0 → form_pts = 5
+    'shots_on_target_avg': 4.5,
+    'possession_avg': 50.0,
+    'total_shots_avg': 12.0,
+    'gk_saves_avg': 3.0,
+    'big_chances_avg': 2.5,
+    'accurate_passes_avg': 300.0,
+    'tackles_won_avg': 8.0,
+    'interceptions_avg': 7.0,
+    'blocked_shots_avg': 2.0,
+}

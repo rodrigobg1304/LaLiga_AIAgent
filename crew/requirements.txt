@@ -1,0 +1,5 @@
+crewai>=0.80.0
+apscheduler>=3.10.0,<4.0
+curl_cffi>=0.6
+mysql-connector-python>=8.0
+python-dotenv>=1.0

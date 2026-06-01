@@ -143,9 +143,19 @@ def insert_match_metadata(matches: list[dict]) -> int:
         ]))
         for m in matches
     ]
+    # COALESCE keeps the existing value when the incoming value is NULL, so
+    # fixture rows stored without scores get updated once real results arrive,
+    # but valid scores are never overwritten with NULL on a re-run.
     sql = (
         f"INSERT INTO {MATCHES_TABLE} ({columns}) VALUES {', '.join(value_rows)} "
-        f"ON DUPLICATE KEY UPDATE MatchDateLocal = VALUES(MatchDateLocal);"
+        f"ON DUPLICATE KEY UPDATE "
+        f"MatchDateLocal  = VALUES(MatchDateLocal), "
+        f"homeScore       = COALESCE(VALUES(homeScore),    homeScore), "
+        f"awayScore       = COALESCE(VALUES(awayScore),    awayScore), "
+        f"homeScoreET     = COALESCE(VALUES(homeScoreET),  homeScoreET), "
+        f"awayScoreET     = COALESCE(VALUES(awayScoreET),  awayScoreET), "
+        f"homeScorePen    = COALESCE(VALUES(homeScorePen), homeScorePen), "
+        f"awayScorePen    = COALESCE(VALUES(awayScorePen), awayScorePen);"
     )
 
     conn = get_connection()

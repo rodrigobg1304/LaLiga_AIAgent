@@ -48,7 +48,8 @@ DB_PORT = _cfg["port"]
 DB_NAME = _cfg["database"]
 DB_USER = _cfg["user"]
 DB_PASS = _cfg["password"]
-TABLE   = _cfg["table"]
+TABLE         = _cfg["table"]
+MATCHES_TABLE = "Matches"
 
 
 def get_connection():
@@ -501,13 +502,24 @@ def get_team_multiple_stats_average(team: str, role: str, years: list[str],
     }
 
 
-def get_team_win_rates(team: str, role: str, league_id: str, years: list[str],
+def get_team_win_rates(team: str, role: str, league_ids, years: list[str],
                        n: Optional[int] = None) -> dict:
+    """
+    Calcula win/draw/loss rates para un equipo.
+
+    Args:
+        league_ids: str o list[str] — una liga o varias (útil para selecciones
+                    que acumulan partidos en múltiples torneos internacionales).
+    """
     team_col = "homeTeam" if role == "home" else "awayTeam"
     if not years:
         return {"wins": 0, "draws": 0, "losses": 0, "total": 0}
+    if not isinstance(league_ids, list):
+        league_ids = [league_ids]
     placeholders_years = ",".join(["%s"] * len(years))
+    placeholders_leagues = ",".join(["%s"] * len(league_ids))
     year_filter = f"AND Year IN ({placeholders_years})"
+    league_filter = f"AND LeagueId IN ({placeholders_leagues})"
     sql = f"""
         SELECT
             SUM(CASE WHEN home_goals > away_goals THEN 1 ELSE 0 END) AS wins,
@@ -521,12 +533,12 @@ def get_team_win_rates(team: str, role: str, league_id: str, years: list[str],
             FROM {TABLE}
             WHERE {team_col} = %s
               AND name = 'Goals'
-              AND LeagueId = %s
+              {league_filter}
               {year_filter}
             GROUP BY matchId
             ORDER BY MAX(Year) DESC, MAX(CAST(Round AS SIGNED)) DESC
     """
-    params = [team, league_id] + years
+    params = [team] + league_ids + years
     if n is not None:
         sql += " LIMIT %s"
         params.append(n)
@@ -797,5 +809,21 @@ def get_matches_with_corners(league_id: str, years: list) -> list:
     HAVING home_corners IS NOT NULL
        AND away_corners IS NOT NULL
     ORDER BY Year ASC, CAST(Round AS SIGNED) ASC
+    """
+    return run_query(sql, (league_id,))
+
+
+def get_upcoming_fixtures(league_id: str) -> list[dict]:
+    """
+    Returns upcoming (unplayed) fixtures for a league from the Matches table.
+    Unplayed = homeScore IS NULL. Ordered by kick-off time.
+    """
+    sql = f"""
+        SELECT MatchId, LeagueId, Round, homeTeam, awayTeam,
+               MatchDate, MatchDateLocal
+        FROM {MATCHES_TABLE}
+        WHERE LeagueId = %s
+          AND homeScore IS NULL
+        ORDER BY MatchDateLocal ASC
     """
     return run_query(sql, (league_id,))

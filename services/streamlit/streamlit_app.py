@@ -11,7 +11,7 @@ os.environ["OTEL_SDK_DISABLED"] = "true"
 
 from football_core.db import (get_teams, get_years, get_years_by_league, get_standings,
                               get_team_results, get_goals_scored, get_teams_by_league,
-                              get_team_clustering_features)
+                              get_team_clustering_features, get_upcoming_fixtures)
 from football_core.config import get_league_options, CLUB_LEAGUES, NATIONAL_TEAM_LEAGUES
 from dotenv import load_dotenv
 
@@ -348,7 +348,7 @@ with st.sidebar:
     st.markdown("---")
     section = st.radio(
         "Navegación",
-        ["Predicción", "Estadísticas", "Clasificación", "Estilos de Juego", "Simulación"],
+        ["Predicción", "Jornada", "Clasificación y Stats", "Estilos de Juego", "Simulación"],
         label_visibility="collapsed"
     )
     st.markdown("---")
@@ -936,73 +936,142 @@ if section == "Predicción":
                 st.markdown(f"- Visitante: {blend['probas_ml'][2] * 100:.1f}%")
 
 # ─────────────────────────────────────────────
-# SECCIÓN: ESTADÍSTICAS
+# SECCIÓN: JORNADA
 # ─────────────────────────────────────────────
 
-elif section == "Estadísticas":
-    st.markdown("### Estadísticas de equipo")
-    teams = cached_teams_by_league(league_id=league_id, season=year_global)
-    team = st.selectbox("Equipo", teams)
+elif section == "Jornada":
+    st.markdown("### Jornada actual")
 
-    if team:
-        col1, col2, col3 = st.columns(3)
+    fixtures = get_upcoming_fixtures(league_id)
 
-        goals = get_goals_scored(team, year=year_global)
-        if goals:
-            g = goals[0]
-            with col1:
-                st.markdown(f"""
-                <div class="metric-card">
-                    <div class="metric-label">Goles marcados</div>
-                    <div class="metric-value">{g.get('total_goals_scored', 0)}</div>
-                </div>
-                """, unsafe_allow_html=True)
-            with col2:
-                st.markdown(f"""
-                <div class="metric-card">
-                    <div class="metric-label">Goles encajados</div>
-                    <div class="metric-value">{g.get('total_goals_conceded', 0)}</div>
-                </div>
-                """, unsafe_allow_html=True)
-            with col3:
-                diff = g.get('total_goals_scored', 0) - g.get('total_goals_conceded', 0)
-                sign = "+" if diff >= 0 else ""
-                st.markdown(f"""
-                <div class="metric-card">
-                    <div class="metric-label">Diferencia</div>
-                    <div class="metric-value">{sign}{diff}</div>
-                </div>
-                """, unsafe_allow_html=True)
+    if not fixtures:
+        st.info("No hay partidos pendientes para esta competición. Usa `collect_fixtures.py` para cargar la jornada.")
+    else:
+        round_num = fixtures[0]["Round"]
+        st.markdown(f'<div class="section-title">Jornada {round_num} · {len(fixtures)} partidos</div>', unsafe_allow_html=True)
+
+        cache_key = f"jornada_{league_id}_{round_num}"
+
+        col_btn, col_clear = st.columns([2, 1])
+        with col_btn:
+            predict_all = st.button("Predecir jornada completa", type="primary", width="stretch")
+        with col_clear:
+            if st.button("Limpiar predicciones", width="stretch"):
+                st.session_state.pop(cache_key, None)
+                st.rerun()
+
+        if predict_all:
+            prediction_url = os.getenv("PREDICTION_URL", "http://localhost:8001")
+            with st.spinner(f"Calculando predicciones para {len(fixtures)} partidos..."):
+                try:
+                    payload = {
+                        "matches": [
+                            {
+                                "home_team": fix["homeTeam"],
+                                "away_team": fix["awayTeam"],
+                                "year": year_global,
+                                "league_id": league_id
+                            }
+                            for fix in fixtures
+                        ]
+                    }
+                    resp = requests.post(
+                        f"{prediction_url}/predict_batch",
+                        json=payload,
+                        timeout=300
+                    )
+                    batch_results = resp.json()
+                    results = {
+                        fix["MatchId"]: batch_results[i]
+                        for i, fix in enumerate(fixtures)
+                    }
+                except Exception as e:
+                    st.error(f"❌ Error al predecir la jornada: {e}")
+                    results = {}
+            st.session_state[cache_key] = results
+
+        predictions = st.session_state.get(cache_key, {})
 
         st.markdown("---")
-        st.markdown('<div class="section-title">Últimos partidos</div>', unsafe_allow_html=True)
 
-        results = get_team_results(team, year=year_global, top_n=10)
-        if results:
-            rows = []
-            for r in results:
-                hg = int(r.get("home_goals") or 0)
-                ag = int(r.get("away_goals") or 0)
-                is_home = r["homeTeam"] == team
-                gf = hg if is_home else ag
-                gc = ag if is_home else hg
-                score = f"{hg} - {ag}"
-                result_icon = "✅" if r["points"] == 3 else ("➖" if r["points"] == 1 else "❌")
-                rows.append({
-                    "Jornada": int(r["Round"]),
-                    "Partido": f"{r['homeTeam']} vs {r['awayTeam']}",
-                    "Resultado": score,
-                    "": result_icon,
-                    "Pts": int(r["points"])
-                })
-            st.dataframe(pd.DataFrame(rows), width='stretch', hide_index=True)
+        for fix in fixtures:
+            home = fix["homeTeam"].replace("-", " ").title()
+            away = fix["awayTeam"].replace("-", " ").title()
+            kickoff = str(fix["MatchDateLocal"] or fix["MatchDate"])
+            kickoff_fmt = kickoff[11:16] if len(kickoff) >= 16 else kickoff
+            date_fmt = kickoff[:10] if len(kickoff) >= 10 else ""
+
+            pred = predictions.get(fix["MatchId"])
+
+            if pred:
+                res = pred.get("resultado", {})
+                probs = res.get("probabilities", {})
+                p1 = probs.get("1", 0)
+                px = probs.get("X", 0)
+                p2 = probs.get("2", 0)
+                predicted = res.get("predicted", "")
+                confidence = res.get("confidence", {})
+                conf_level = confidence.get("level", "low")
+
+                conf_color = {"high": "#22c55e", "medium": "#f59e0b", "low": "#94a3b8"}.get(conf_level, "#94a3b8")
+
+                ou = pred.get("over_under_goals", {})
+                over25 = ou.get("over_2_5", {}).get("over", 0)
+                over15 = ou.get("over_1_5", {}).get("over", 0)
+
+                p1_bold = "font-weight:700; color:#1d4ed8;" if predicted == "1" else "color:#374151;"
+                px_bold = "font-weight:700; color:#d97706;" if predicted == "X" else "color:#374151;"
+                p2_bold = "font-weight:700; color:#dc2626;" if predicted == "2" else "color:#374151;"
+
+                st.markdown(f"""
+                <div style="background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:16px 20px; margin-bottom:12px;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+                        <span style="font-size:12px; color:#6b7280;">📅 {date_fmt} &nbsp; 🕐 {kickoff_fmt}</span>
+                        <span style="font-size:11px; padding:2px 8px; border-radius:10px; background:{conf_color}22; color:{conf_color}; font-weight:600;">{confidence.get('description', '')}</span>
+                    </div>
+                    <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
+                        <span style="font-size:15px; font-weight:600; flex:1; text-align:right;">{home}</span>
+                        <div style="display:flex; gap:6px; padding:0 12px;">
+                            <div style="text-align:center; min-width:52px; background:#f8fafc; border-radius:8px; padding:6px 4px;">
+                                <div style="font-size:9px; color:#9ca3af; margin-bottom:2px;">LOCAL</div>
+                                <div style="font-size:17px; {p1_bold}">{p1:.0f}%</div>
+                            </div>
+                            <div style="text-align:center; min-width:52px; background:#f8fafc; border-radius:8px; padding:6px 4px;">
+                                <div style="font-size:9px; color:#9ca3af; margin-bottom:2px;">EMPATE</div>
+                                <div style="font-size:17px; {px_bold}">{px:.0f}%</div>
+                            </div>
+                            <div style="text-align:center; min-width:52px; background:#f8fafc; border-radius:8px; padding:6px 4px;">
+                                <div style="font-size:9px; color:#9ca3af; margin-bottom:2px;">VISIT.</div>
+                                <div style="font-size:17px; {p2_bold}">{p2:.0f}%</div>
+                            </div>
+                        </div>
+                        <span style="font-size:15px; font-weight:600; flex:1;">{away}</span>
+                    </div>
+                    <div style="margin-top:10px; display:flex; gap:8px; font-size:12px; color:#6b7280;">
+                        <span>⚽ +1.5 goles: <b>{over15:.0f}%</b></span>
+                        <span style="color:#d1d5db;">|</span>
+                        <span>⚽ +2.5 goles: <b>{over25:.0f}%</b></span>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                st.markdown(f"""
+                <div style="background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:16px 20px; margin-bottom:12px;">
+                    <div style="font-size:12px; color:#6b7280; margin-bottom:8px;">📅 {date_fmt} &nbsp; 🕐 {kickoff_fmt}</div>
+                    <div style="display:flex; align-items:center; justify-content:center; gap:16px;">
+                        <span style="font-size:15px; font-weight:600;">{home}</span>
+                        <span style="color:#9ca3af; font-size:13px;">vs</span>
+                        <span style="font-size:15px; font-weight:600;">{away}</span>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
 
 
 # ─────────────────────────────────────────────
-# SECCIÓN: CLASIFICACIÓN
+# SECCIÓN: CLASIFICACIÓN Y STATS
 # ─────────────────────────────────────────────
 
-elif section == "Clasificación":
+elif section == "Clasificación y Stats":
     st.markdown("### Clasificación")
     data = cached_standings(league=league_id, year=year_global)
 
@@ -1045,7 +1114,7 @@ elif section == "Clasificación":
                 f"</tr>"
             )
 
-        html = (
+        standings_html = (
             "<div class='card'>"
             "<table class='standings-table'>"
             "<thead><tr>"
@@ -1055,8 +1124,63 @@ elif section == "Clasificación":
             f"<tbody>{rows}</tbody>"
             "</table></div>"
         )
+        st.markdown(standings_html, unsafe_allow_html=True)
 
-        st.markdown(html, unsafe_allow_html=True)
+        st.markdown("---")
+        st.markdown("### Estadísticas de equipo")
+
+        standing_teams = [row['team'] for row in data]
+        team = st.selectbox("Selecciona un equipo", standing_teams,
+                            format_func=lambda t: t.replace("-", " ").title())
+
+        if team:
+            col1, col2, col3 = st.columns(3)
+            goals = get_goals_scored(team, year=year_global)
+            if goals:
+                g = goals[0]
+                with col1:
+                    st.markdown(f"""
+                    <div class="metric-card">
+                        <div class="metric-label">Goles marcados</div>
+                        <div class="metric-value">{g.get('total_goals_scored', 0)}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                with col2:
+                    st.markdown(f"""
+                    <div class="metric-card">
+                        <div class="metric-label">Goles encajados</div>
+                        <div class="metric-value">{g.get('total_goals_conceded', 0)}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                with col3:
+                    diff = g.get('total_goals_scored', 0) - g.get('total_goals_conceded', 0)
+                    sign = "+" if diff >= 0 else ""
+                    st.markdown(f"""
+                    <div class="metric-card">
+                        <div class="metric-label">Diferencia</div>
+                        <div class="metric-value">{sign}{diff}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+            st.markdown("---")
+            st.markdown('<div class="section-title">Últimos partidos</div>', unsafe_allow_html=True)
+
+            results = get_team_results(team, year=year_global, top_n=10)
+            if results:
+                result_rows = []
+                for r in results:
+                    hg = int(r.get("home_goals") or 0)
+                    ag = int(r.get("away_goals") or 0)
+                    score = f"{hg} - {ag}"
+                    result_icon = "✅" if r["points"] == 3 else ("➖" if r["points"] == 1 else "❌")
+                    result_rows.append({
+                        "Jornada": int(r["Round"]),
+                        "Partido": f"{r['homeTeam']} vs {r['awayTeam']}",
+                        "Resultado": score,
+                        "": result_icon,
+                        "Pts": int(r["points"])
+                    })
+                st.dataframe(pd.DataFrame(result_rows), width='stretch', hide_index=True)
     else:
         st.info("No hay datos de clasificación para esta temporada.")
 

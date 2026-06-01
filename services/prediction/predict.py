@@ -793,21 +793,9 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"⚠️  Error cargando modelos Corners: {e}")
 
-    # ── PRE-CALENTAR MATRIZ DE PROBABILIDADES PARA SIMULACIÓN ──
-    print("🚀 Pre-calentando matriz de probabilidades para simulación de torneo...")
-    try:
-        wc_model_entry = model_manager_1x2.models.get("16")
-        if wc_model_entry:
-            wc_teams: set = set()
-            for lid in QUALY_LEAGUES:
-                wc_teams.update(get_teams_by_league(league_id=lid))
-            wc_teams_list = sorted(wc_teams)
-            build_probability_matrix(wc_teams_list, wc_model_entry["model"], year=None)
-            print(f"  ✅ Matriz precalculada para {len(wc_teams_list)} selecciones")
-        else:
-            print("  ⚠️  Modelo worldcup_all no disponible, saltando precalentamiento")
-    except Exception as e:
-        print(f"⚠️  Error precalentando matriz de simulación: {e}")
+    # La matriz de probabilidades para simulación se calcula de forma lazy en el
+    # primer request a /simulate y se cachea en tournament_simulation._prob_cache.
+    # Pre-calcularla aquí bloquearía el startup (N² predicciones con 100+ selecciones).
 
     print("✅ Precarga completada. API lista.")
     yield
@@ -1057,6 +1045,35 @@ def predict(req: PredictionRequest):
         "saves": saves_predictions,
         "corners": corners_predictions
     }
+
+
+# ─────────────────────────────────────────────
+# BATCH ENDPOINT
+# ─────────────────────────────────────────────
+
+class BatchPredictionRequest(BaseModel):
+    matches: list[PredictionRequest]
+
+
+@app.post("/predict_batch")
+def predict_batch(req: BatchPredictionRequest):
+    """
+    Predicts all matches in a round with a single HTTP call.
+    Warms the ELO cache once before processing all matches, avoiding the
+    per-match rebuild cost that makes sequential /predict calls so slow.
+    Returns a list of results in the same order as the input matches.
+    Each entry is the same structure as /predict, or null if the match failed.
+    """
+    warm_cache()
+
+    results = []
+    for match in req.matches:
+        try:
+            result = predict(match)
+            results.append(result)
+        except Exception as e:
+            results.append(None)
+    return results
 
 
 # ─────────────────────────────────────────────

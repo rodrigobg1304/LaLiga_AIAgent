@@ -1,50 +1,50 @@
 {
-  "accuracy": 0.4666666666666667,
-  "log_loss": 1.0285665274638942,
+  "accuracy": 0.45526315789473687,
+  "log_loss": 1.0393291623424432,
   "classification_report": {
     "1 (Home)": {
-      "precision": 0.5333333333333333,
-      "recall": 0.5137614678899083,
-      "f1-score": 0.5233644859813084,
-      "support": 109.0
+      "precision": 0.5267175572519084,
+      "recall": 0.5,
+      "f1-score": 0.5130111524163569,
+      "support": 138.0
     },
     "X (Draw)": {
-      "precision": 0.3669724770642202,
-      "recall": 0.4,
-      "f1-score": 0.3827751196172249,
-      "support": 100.0
+      "precision": 0.34558823529411764,
+      "recall": 0.3790322580645161,
+      "f1-score": 0.36153846153846153,
+      "support": 124.0
     },
     "2 (Away)": {
-      "precision": 0.5116279069767442,
-      "recall": 0.4835164835164835,
-      "f1-score": 0.4971751412429379,
-      "support": 91.0
+      "precision": 0.504424778761062,
+      "recall": 0.4830508474576271,
+      "f1-score": 0.4935064935064935,
+      "support": 118.0
     },
-    "accuracy": 0.4666666666666667,
+    "accuracy": 0.45526315789473687,
     "macro avg": {
-      "precision": 0.4706445724580992,
-      "recall": 0.4657593171354639,
-      "f1-score": 0.4677715822804904,
-      "support": 300.0
+      "precision": 0.45891019043569603,
+      "recall": 0.4540277018407144,
+      "f1-score": 0.4560187024871039,
+      "support": 380.0
     },
     "weighted avg": {
-      "precision": 0.4712957352487969,
-      "recall": 0.4666666666666667,
-      "f1-score": 0.4685572626226415,
-      "support": 300.0
+      "precision": 0.4606897051869454,
+      "recall": 0.45526315789473687,
+      "f1-score": 0.4575265118368229,
+      "support": 380.0
     }
   },
   "predictions_distribution": {
-    "1": 105,
-    "X": 109,
-    "2": 86
+    "1": 131,
+    "X": 136,
+    "2": 113
   },
   "real_distribution": {
-    "1": 109,
-    "X": 100,
-    "2": 91
+    "1": 138,
+    "X": 124,
+    "2": 118
   },
-  "test_size": 300,
+  "test_size": 380,
   "feature_importances": {
     "elo_home": 0.0342218354344368,
     "elo_away": 0.027621472254395485,
@@ -88,8 +88,8 @@
     "shots_on_target_balance": 0.019967403262853622
   },
   "best_iteration": 35,
-  "best_score": 1.0130533437457,
-  "timestamp": "2026-03-24T11:17:17.949356",
+  "best_score": 1.0128240055943791,
+  "timestamp": "2026-06-01T20:59:17.825872",
   "league": "serie_a",
   "model_type": "XGBoost",
   "config": {
