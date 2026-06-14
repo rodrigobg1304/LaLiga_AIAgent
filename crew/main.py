@@ -1,15 +1,23 @@
 """
 Scheduled football data-collection pipeline.
 
-Runs the CrewAI collection crew every Monday and Friday at 08:00 (Europe/Madrid).
+Two independent scheduled jobs:
+  • Domestic leagues (LaLiga, Premier League, Serie A):
+      Every Monday and Friday at 08:00 (Europe/Madrid).
+  • World Cup 2026 (tournament ID 16, season 58210):
+      Every day at 09:00 (Europe/Madrid).
+
 All output is logged to crew/logs/agent_runs.log with a timestamped header per run.
 
 Usage:
     # Start the scheduler (blocks until Ctrl+C)
     python main.py
 
-    # Trigger a single run immediately (useful for manual testing)
+    # Trigger a domestic-leagues run immediately (useful for manual testing)
     python main.py --run-now
+
+    # Trigger a World Cup run immediately
+    python main.py --run-worldcup-now
 """
 import argparse
 import logging
@@ -72,7 +80,7 @@ def run_collection_crew() -> None:
     separator = "=" * 60
 
     logger.info(separator)
-    logger.info(f"RUN START  {run_ts}")
+    logger.info(f"RUN START [DOMESTIC]  {run_ts}")
     logger.info(separator)
 
     # Pre-flight: avoid spinning up agents if Sofascore is blocked
@@ -84,7 +92,7 @@ def run_collection_crew() -> None:
         logger.info(f"RUN END    {run_ts}  STATUS=SKIPPED (Sofascore blocked)")
         return
 
-    logger.info("Sofascore pre-flight check passed. Launching collection crew.")
+    logger.info("Sofascore pre-flight check passed. Launching domestic collection crew.")
 
     try:
         # Lazy import so env vars are already loaded before crew.py is parsed
@@ -93,12 +101,45 @@ def run_collection_crew() -> None:
         collection_crew = build_crew()
         result = collection_crew.kickoff()
 
-        logger.info("Crew completed successfully.")
+        logger.info("Domestic crew completed successfully.")
         logger.info(f"Crew output:\n{result}")
         logger.info(f"RUN END    {run_ts}  STATUS=COMPLETED")
 
     except Exception as exc:
-        logger.error(f"Crew run failed: {exc}", exc_info=True)
+        logger.error(f"Domestic crew run failed: {exc}", exc_info=True)
+        logger.info(f"RUN END    {run_ts}  STATUS=FAILED")
+
+
+def run_worldcup_crew() -> None:
+    run_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    separator = "=" * 60
+
+    logger.info(separator)
+    logger.info(f"RUN START [WORLD CUP]  {run_ts}")
+    logger.info(separator)
+
+    if not _sofascore_accessible():
+        logger.warning(
+            "Sofascore API is not accessible. "
+            "Skipping World Cup run — will retry tomorrow at 09:00."
+        )
+        logger.info(f"RUN END    {run_ts}  STATUS=SKIPPED (Sofascore blocked)")
+        return
+
+    logger.info("Sofascore pre-flight check passed. Launching World Cup collection crew.")
+
+    try:
+        from worldcup_crew import build_worldcup_crew
+
+        wc_crew = build_worldcup_crew()
+        result = wc_crew.kickoff()
+
+        logger.info("World Cup crew completed successfully.")
+        logger.info(f"Crew output:\n{result}")
+        logger.info(f"RUN END    {run_ts}  STATUS=COMPLETED")
+
+    except Exception as exc:
+        logger.error(f"World Cup crew run failed: {exc}", exc_info=True)
         logger.info(f"RUN END    {run_ts}  STATUS=FAILED")
 
 
@@ -109,13 +150,23 @@ def main() -> None:
     parser.add_argument(
         "--run-now",
         action="store_true",
-        help="Execute a single collection run immediately, then exit (skips the scheduler).",
+        help="Execute a single domestic-leagues run immediately, then exit.",
+    )
+    parser.add_argument(
+        "--run-worldcup-now",
+        action="store_true",
+        help="Execute a single World Cup collection run immediately, then exit.",
     )
     args = parser.parse_args()
 
     if args.run_now:
-        logger.info("Manual run triggered via --run-now.")
+        logger.info("Manual domestic run triggered via --run-now.")
         run_collection_crew()
+        return
+
+    if args.run_worldcup_now:
+        logger.info("Manual World Cup run triggered via --run-worldcup-now.")
+        run_worldcup_crew()
         return
 
     scheduler = BlockingScheduler(timezone="Europe/Madrid")
@@ -125,13 +176,24 @@ def main() -> None:
         trigger=CronTrigger(day_of_week="mon,fri", hour=8, minute=0),
         id="football_data_collection",
         name="Football Data Collection (LaLiga + Premier League + Serie A)",
-        misfire_grace_time=3600,  # tolerate up to 1 h of scheduler downtime
-        max_instances=1,          # never run two collection jobs concurrently
-        coalesce=True,            # collapse missed runs into a single catch-up run
+        misfire_grace_time=3600,
+        max_instances=1,
+        coalesce=True,
+    )
+
+    scheduler.add_job(
+        run_worldcup_crew,
+        trigger=CronTrigger(hour=9, minute=0),   # every day
+        id="worldcup_data_collection",
+        name="World Cup 2026 Daily Data Collection",
+        misfire_grace_time=3600,
+        max_instances=1,
+        coalesce=True,
     )
 
     logger.info("Football Data Collection Scheduler started.")
-    logger.info("Schedule : every Monday and Friday at 08:00 Europe/Madrid")
+    logger.info("Schedule (domestic)  : every Monday and Friday at 08:00 Europe/Madrid")
+    logger.info("Schedule (World Cup) : every day at 09:00 Europe/Madrid")
     logger.info("Log file : %s", _LOG_DIR / "agent_runs.log")
     logger.info("Press Ctrl+C to stop.")
 

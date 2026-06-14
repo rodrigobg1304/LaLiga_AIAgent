@@ -1,10 +1,9 @@
 """
 Subprocess tool for the data-collection crew.
 
-Wraps scripts/leagues/collect_leagues.py as a CrewAI tool.
-The subprocess inherits the current environment and additionally receives
-DB_* vars mapped from MYSQL_* so collect_leagues.py / db_utils.py work
-with either env-var naming convention.
+Wraps scripts/leagues/collect_leagues.py and scripts/tournaments/collect_tournaments.py
+as CrewAI tools. Subprocesses inherit the current environment and additionally receive
+DB_* vars mapped from MYSQL_* so db_utils.py works with either env-var naming convention.
 """
 import os
 import sys
@@ -16,6 +15,7 @@ from crewai.tools import tool
 _PROJECT_ROOT = Path(__file__).parent.parent.parent
 _SCRIPTS_DIR = _PROJECT_ROOT / "scripts"
 _COLLECT_SCRIPT = _SCRIPTS_DIR / "leagues" / "collect_leagues.py"
+_COLLECT_TOURNAMENT_SCRIPT = _SCRIPTS_DIR / "tournaments" / "collect_tournaments.py"
 
 # Fixed season IDs for the three automated leagues
 LEAGUE_SEASONS = {
@@ -114,4 +114,68 @@ def collect_league_round(league_id: int, round_id: int) -> dict:
             "success": False, "league_name": info["name"], "league_id": league_id,
             "season_id": season_id, "round_id": round_id,
             "stdout": "", "stderr": str(exc), "returncode": -1,
+        }
+
+
+@tool("collect_tournament_rounds")
+def collect_tournament_rounds(league_id: int, season_id: int, tournament_type: str = "qualifier") -> dict:
+    """
+    Run scripts/tournaments/collect_tournaments.py to collect ALL available rounds
+    for the given tournament from Sofascore and insert them into MySQL.
+
+    Uses --all-rounds so every completed round is collected in a single call.
+    INSERT IGNORE in db_utils ensures running this daily never creates duplicates.
+
+    Inputs:
+      league_id       — Sofascore tournament ID (e.g. 16 for World Cup)
+      season_id       — Sofascore season ID (e.g. 58210 for 2026 World Cup)
+      tournament_type — "qualifier" (default) or "regular"
+
+    Returns a dict:
+      success      — True if script exited with code 0
+      league_id    — as provided
+      season_id    — as provided
+      stdout       — last 4000 chars of script stdout
+      stderr       — last 1000 chars of script stderr
+      returncode   — process exit code
+      error        — exception message if subprocess could not be started
+    """
+    cmd = [
+        sys.executable,
+        str(_COLLECT_TOURNAMENT_SCRIPT),
+        "--type",    tournament_type,
+        "--league",  str(league_id),
+        "--season",  str(season_id),
+        "--all-rounds",
+    ]
+
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            cwd=str(_SCRIPTS_DIR),
+            env=_subprocess_env(),
+            timeout=3600,  # 1-hour ceiling: many rounds × 10s delay per match
+        )
+        return {
+            "success":    result.returncode == 0,
+            "league_id":  league_id,
+            "season_id":  season_id,
+            "stdout":     result.stdout[-4000:] if result.stdout else "",
+            "stderr":     result.stderr[-1000:] if result.stderr else "",
+            "returncode": result.returncode,
+            "error":      None,
+        }
+    except subprocess.TimeoutExpired:
+        return {
+            "success": False, "league_id": league_id, "season_id": season_id,
+            "stdout": "", "stderr": "", "returncode": -1,
+            "error": "Subprocess timed out after 3600 seconds.",
+        }
+    except Exception as exc:
+        return {
+            "success": False, "league_id": league_id, "season_id": season_id,
+            "stdout": "", "stderr": "", "returncode": -1,
+            "error": str(exc),
         }
