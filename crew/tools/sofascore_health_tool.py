@@ -1,18 +1,15 @@
 """
 Sofascore validation tools for the data-collection crew.
 
-Uses curl_cffi (Chrome impersonation) consistent with sofascore_client.py.
-Known issue: Sofascore occasionally blocks daily traffic — handle gracefully.
+Uses tls-client (Go-based TLS fingerprinting) consistent with sofascore_client.py.
 """
-from curl_cffi import requests as cffi_requests
+import tls_client
 from crewai.tools import tool
 
 # Sofascore status codes for fully completed matches (FT, AET, AP)
 COMPLETED_STATUS_CODES = {100, 110, 120}
 
-_IMPERSONATE = "chrome120"
-_TIMEOUT = 15
-_HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+_session = tls_client.Session(client_identifier="chrome_120", random_tls_extension_order=True)
 
 
 @tool("check_sofascore_health")
@@ -25,12 +22,7 @@ def check_sofascore_health() -> dict:
     If accessible is False the API is blocked or unreachable — skip the run.
     """
     try:
-        resp = cffi_requests.get(
-            "https://api.sofascore.com/api/v1/unique-tournament/8/seasons",
-            headers=_HEADERS,
-            timeout=_TIMEOUT,
-            impersonate=_IMPERSONATE,
-        )
+        resp = _session.get("https://api.sofascore.com/api/v1/unique-tournament/8/seasons")
         if resp.status_code == 200:
             return {"accessible": True, "status_code": 200, "error": None}
         return {
@@ -66,7 +58,7 @@ def check_round_status(league_id: int, season_id: int, round_id: int) -> dict:
         f"/season/{season_id}/events/round/{round_id}"
     )
     try:
-        resp = cffi_requests.get(url, headers={}, impersonate=_IMPERSONATE, timeout=_TIMEOUT)
+        resp = _session.get(url)
         if resp.status_code != 200:
             return {
                 "exists": False, "all_finished": False, "match_count": 0,

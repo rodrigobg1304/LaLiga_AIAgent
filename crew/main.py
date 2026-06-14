@@ -63,13 +63,10 @@ def _sofascore_accessible(tournament_id: int = 8) -> bool:
         16 → World Cup (tournament pre-flight)
     """
     try:
-        from curl_cffi import requests as cffi_requests
-
-        resp = cffi_requests.get(
-            f"https://api.sofascore.com/api/v1/unique-tournament/{tournament_id}/seasons",
-            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
-            timeout=15,
-            impersonate="chrome120",
+        import tls_client
+        session = tls_client.Session(client_identifier="chrome_120", random_tls_extension_order=True)
+        resp = session.get(
+            f"https://api.sofascore.com/api/v1/unique-tournament/{tournament_id}/seasons"
         )
         return resp.status_code == 200
     except Exception as exc:

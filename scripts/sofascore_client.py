@@ -1,8 +1,7 @@
 """
 Sofascore API client for fetching match statistics.
 
-Uses curl_cffi to impersonate Chrome and bypass Sofascore API restrictions.
-Note (2025-11): Daily request blocking has been observed; verify server accessibility periodically.
+Uses tls-client (Go-based TLS fingerprinting) to bypass Sofascore WAF protection.
 
 Usage:
     # 1. Populate seasons for each league you need
@@ -19,13 +18,16 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 import numpy as np
 import pandas as pd
-from requests import ConnectTimeout
-from curl_cffi import requests as cffi_requests
+import tls_client
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "football-core" / "src"))
 from football_core.constants import SOFASCORE_ALL, LEAGUE_TIMEZONES
 
 league_dict = SOFASCORE_ALL
+
+# Shared tls_client session — reused across all requests for connection efficiency.
+# chrome_120 fingerprint bypasses Sofascore's WAF (curl_cffi impersonation is blocked).
+_session = tls_client.Session(client_identifier="chrome_120", random_tls_extension_order=True)
 
 # Registry populated by calling get_seasons_dict_result() per league.
 # Key: league_id (str) → Value: list of {season_id: year} dicts
@@ -39,12 +41,7 @@ COMPLETED_STATUS_CODES = {100, 110, 120}
 def get_seasons_dict(league_id):
     """Get seasons mapping id:year values for a given league. Returns raw HTTP response."""
     url = f'https://api.sofascore.com/api/v1/unique-tournament/{league_id}/seasons'
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Accept': '*/*',
-        'Accept-Language': 'es-ES,es;q=0.9,en;q=0.8',
-    }
-    return cffi_requests.get(url, headers=headers, data={}, impersonate="chrome120")
+    return _session.get(url)
 
 
 def get_seasons_dict_result(league_id):
@@ -69,7 +66,7 @@ def get_seasons_dict_result(league_id):
 def get_rounds(league_id, season_id):
     """Get all available rounds for a league/season. Returns raw HTTP response."""
     url = f'https://api.sofascore.com/api/v1/unique-tournament/{league_id}/season/{season_id}/rounds'
-    return cffi_requests.get(url, headers={}, data={}, impersonate="chrome120")
+    return _session.get(url)
 
 
 def get_rounds_list(league_id, season_id):
@@ -99,7 +96,7 @@ def get_matches_by_round(league_id, season_id, round_id):
     Returns raw HTTP response.
     """
     url = f'https://api.sofascore.com/api/v1/unique-tournament/{league_id}/season/{season_id}/events/round/{round_id}'
-    return cffi_requests.get(url, headers={}, data={}, impersonate="chrome120")
+    return _session.get(url)
 
 
 def get_matches_league_by_round(league_id, season_id, round_id):
@@ -123,7 +120,7 @@ def get_matches_league_by_round(league_id, season_id, round_id):
 def get_statistics_by_match(match_id):
     """Get match statistics for a single match. Returns raw HTTP response."""
     url = f'https://api.sofascore.com/api/v1/event/{match_id}/statistics'
-    return cffi_requests.get(url, headers={}, data={}, impersonate="chrome120")
+    return _session.get(url)
 
 
 def build_match_metadata(event, my_league, my_round) -> dict:
@@ -323,7 +320,7 @@ def collect_match_statistics(my_league, my_season, my_round, my_match_id):
                         return pd.DataFrame()
                     try:
                         return _build_match_statistics_df(event, my_league, my_round, season_year)
-                    except (KeyError, TimeoutError, ConnectTimeout) as e:
+                    except (KeyError, TimeoutError, Exception) as e:
                         print(f"Error collecting match {my_match_id}: {e}")
                         return pd.DataFrame()
                 print(f"Match {my_match_id} not found in round {my_round} for league {my_league}.")
@@ -364,7 +361,7 @@ def collect_data_statistics_from(my_league, my_season, my_round):
                         try:
                             statistics_temp_df = _build_match_statistics_df(event, my_league, my_round, season_year)
                             statistics_df = pd.concat([statistics_df, statistics_temp_df], ignore_index=True)
-                        except (KeyError, TimeoutError, ConnectTimeout) as e:
+                        except (KeyError, TimeoutError, Exception) as e:
                             print(f"Error in {home_team_key} vs {away_team_key}: {e}")
                     else:
                         error_status = event['status']['description']
