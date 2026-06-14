@@ -53,23 +53,27 @@ logger = logging.getLogger(__name__)
 
 # ── Pre-flight check ──────────────────────────────────────────────────────────
 
-def _sofascore_accessible() -> bool:
+def _sofascore_accessible(tournament_id: int = 8) -> bool:
     """
     Quick HTTP probe against Sofascore before spending LLM credits on the crew.
     Returns True only when the API responds with HTTP 200.
+
+    tournament_id — Sofascore unique-tournament ID to probe:
+        8  → LaLiga  (domestic leagues pre-flight)
+        16 → World Cup (tournament pre-flight)
     """
     try:
         from curl_cffi import requests as cffi_requests
 
         resp = cffi_requests.get(
-            "https://api.sofascore.com/api/v1/unique-tournament/8/seasons",
+            f"https://api.sofascore.com/api/v1/unique-tournament/{tournament_id}/seasons",
             headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
             timeout=15,
             impersonate="chrome120",
         )
         return resp.status_code == 200
     except Exception as exc:
-        logger.warning(f"Sofascore pre-flight request failed: {exc}")
+        logger.warning(f"Sofascore pre-flight request failed (tournament {tournament_id}): {exc}")
         return False
 
 
@@ -118,9 +122,9 @@ def run_worldcup_crew() -> None:
     logger.info(f"RUN START [WORLD CUP]  {run_ts}")
     logger.info(separator)
 
-    if not _sofascore_accessible():
+    if not _sofascore_accessible(tournament_id=16):
         logger.warning(
-            "Sofascore API is not accessible. "
+            "Sofascore API is not accessible (tournament 16 / World Cup). "
             "Skipping World Cup run — will retry tomorrow at 09:00."
         )
         logger.info(f"RUN END    {run_ts}  STATUS=SKIPPED (Sofascore blocked)")
