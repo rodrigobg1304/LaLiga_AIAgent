@@ -87,7 +87,7 @@
     "shots_balance": 0.025050102158680993,
     "shots_on_target_balance": 0.019269049024407448
   },
-  "timestamp": "2026-06-01T20:56:17.267087",
+  "timestamp": "2026-06-15T17:42:53.909961",
   "league": "serie_a",
   "model_type": "RandomForest_Calibrated",
   "config": {

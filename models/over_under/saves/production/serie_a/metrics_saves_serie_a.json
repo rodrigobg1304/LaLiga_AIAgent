@@ -8,7 +8,7 @@
     "test_recall": 1.0,
     "positive_rate_train": 0.9192628345765687,
     "positive_rate_test": 0.9144736842105263,
-    "trained_at": "2026-06-01T22:55:32.308729"
+    "trained_at": "2026-06-15T19:31:21.867794"
   },
   "over_1_5": {
     "threshold": 1.5,
@@ -19,7 +19,7 @@
     "test_recall": 0.9946808510638298,
     "positive_rate_train": 0.7439666520403686,
     "positive_rate_test": 0.7421052631578947,
-    "trained_at": "2026-06-01T22:55:37.762541"
+    "trained_at": "2026-06-15T19:31:26.915473"
   },
   "over_2_5": {
     "threshold": 2.5,
@@ -30,7 +30,7 @@
     "test_recall": 0.8842105263157894,
     "positive_rate_train": 0.5300570425625274,
     "positive_rate_test": 0.5,
-    "trained_at": "2026-06-01T22:55:43.393524"
+    "trained_at": "2026-06-15T19:31:32.318307"
   },
   "over_3_5": {
     "threshold": 3.5,
@@ -41,7 +41,7 @@
     "test_recall": 0.0,
     "positive_rate_train": 0.33589293549802546,
     "positive_rate_test": 0.30657894736842106,
-    "trained_at": "2026-06-01T22:55:45.422332"
+    "trained_at": "2026-06-15T19:31:34.296977"
   },
   "over_4_5": {
     "threshold": 4.5,
@@ -52,7 +52,7 @@
     "test_recall": 0.0,
     "positive_rate_train": 0.19416410706450196,
     "positive_rate_test": 0.175,
-    "trained_at": "2026-06-01T22:55:47.515029"
+    "trained_at": "2026-06-15T19:31:36.248411"
   },
   "over_5_5": {
     "threshold": 5.5,
@@ -63,7 +63,7 @@
     "test_recall": 0.0,
     "positive_rate_train": 0.10816147433084686,
     "positive_rate_test": 0.09210526315789473,
-    "trained_at": "2026-06-01T22:55:49.953857"
+    "trained_at": "2026-06-15T19:31:38.222872"
   },
   "over_6_5": {
     "threshold": 6.5,
@@ -74,6 +74,6 @@
     "test_recall": 0.0,
     "positive_rate_train": 0.05726195699868363,
     "positive_rate_test": 0.046052631578947366,
-    "trained_at": "2026-06-01T22:55:52.417940"
+    "trained_at": "2026-06-15T19:31:40.110885"
   }
 }

@@ -89,7 +89,7 @@
   },
   "best_iteration": 53,
   "best_score": 1.0398021322990854,
-  "timestamp": "2026-06-01T20:57:52.668868",
+  "timestamp": "2026-06-15T17:44:09.734543",
   "league": "laliga",
   "model_type": "XGBoost",
   "config": {

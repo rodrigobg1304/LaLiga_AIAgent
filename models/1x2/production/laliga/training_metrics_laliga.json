@@ -87,7 +87,7 @@
     "shots_balance": 0.027624671397280316,
     "shots_on_target_balance": 0.020762734180174748
   },
-  "timestamp": "2026-06-01T20:54:27.574263",
+  "timestamp": "2026-06-15T17:41:08.289176",
   "league": "laliga",
   "model_type": "RandomForest_Calibrated",
   "config": {

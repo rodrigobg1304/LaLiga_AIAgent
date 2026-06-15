@@ -89,7 +89,7 @@
   },
   "best_iteration": 35,
   "best_score": 1.0128240055943791,
-  "timestamp": "2026-06-01T20:59:17.825872",
+  "timestamp": "2026-06-15T17:45:44.468264",
   "league": "serie_a",
   "model_type": "XGBoost",
   "config": {

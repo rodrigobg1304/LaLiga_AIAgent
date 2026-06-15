@@ -8,7 +8,7 @@
     "test_recall": 0.9981818181818182,
     "positive_rate_train": 0.788284335234752,
     "positive_rate_test": 0.7236842105263158,
-    "trained_at": "2026-06-01T23:50:43.840521"
+    "trained_at": "2026-06-15T20:24:13.161156"
   },
   "over_3_5": {
     "threshold": 3.5,
@@ -19,7 +19,7 @@
     "test_recall": 0.9011235955056179,
     "positive_rate_train": 0.6452391399736727,
     "positive_rate_test": 0.5855263157894737,
-    "trained_at": "2026-06-01T23:50:49.403412"
+    "trained_at": "2026-06-15T20:24:18.533476"
   },
   "over_4_5": {
     "threshold": 4.5,
@@ -30,7 +30,7 @@
     "test_recall": 0.5377643504531722,
     "positive_rate_train": 0.48924967090829313,
     "positive_rate_test": 0.4355263157894737,
-    "trained_at": "2026-06-01T23:50:55.220027"
+    "trained_at": "2026-06-15T20:24:20.448736"
   },
   "over_5_5": {
     "threshold": 5.5,
@@ -41,7 +41,7 @@
     "test_recall": 0.09623430962343096,
     "positive_rate_train": 0.36375603334795964,
     "positive_rate_test": 0.3144736842105263,
-    "trained_at": "2026-06-01T23:50:57.270839"
+    "trained_at": "2026-06-15T20:24:25.457881"
   },
   "over_6_5": {
     "threshold": 6.5,
@@ -52,7 +52,7 @@
     "test_recall": 0.0,
     "positive_rate_train": 0.2602018429135586,
     "positive_rate_test": 0.21052631578947367,
-    "trained_at": "2026-06-01T23:50:59.501717"
+    "trained_at": "2026-06-15T20:24:27.375183"
   },
   "over_7_5": {
     "threshold": 7.5,
@@ -63,7 +63,7 @@
     "test_recall": 0.0,
     "positive_rate_train": 0.17134708205353225,
     "positive_rate_test": 0.11315789473684211,
-    "trained_at": "2026-06-01T23:51:02.274309"
+    "trained_at": "2026-06-15T20:24:29.304638"
   },
   "over_8_5": {
     "threshold": 8.5,
@@ -74,7 +74,7 @@
     "test_recall": 0.0,
     "positive_rate_train": 0.10530934620447564,
     "positive_rate_test": 0.07105263157894737,
-    "trained_at": "2026-06-01T23:51:04.248919"
+    "trained_at": "2026-06-15T20:24:31.375028"
   },
   "over_9_5": {
     "threshold": 9.5,
@@ -85,6 +85,6 @@
     "test_recall": 0.0,
     "positive_rate_train": 0.06428258007898201,
     "positive_rate_test": 0.04342105263157895,
-    "trained_at": "2026-06-01T23:51:06.566130"
+    "trained_at": "2026-06-15T20:24:33.274933"
   }
 }
