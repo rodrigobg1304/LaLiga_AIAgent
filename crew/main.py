@@ -3,9 +3,11 @@ Scheduled football data-collection pipeline.
 
 Two independent scheduled jobs:
   • Domestic leagues (LaLiga, Premier League, Serie A):
-      Every Monday and Friday at 08:00 (Europe/Madrid).
+      Every Tuesday and Friday at 08:00 (Europe/Madrid).
+      Season window: 1 Aug → 1 Jun (skips Jun 2 – Jul 31).
   • World Cup 2026 (tournament ID 16, season 58210):
       Every day at 09:00 (Europe/Madrid).
+      Active window: 11 Jun 2026 → 20 Jul 2026 only.
 
 All output is logged to crew/logs/agent_runs.log with a timestamped header per run.
 
@@ -74,6 +76,17 @@ def _sofascore_accessible(tournament_id: int = 8) -> bool:
         return False
 
 
+# ── Season windows ────────────────────────────────────────────────────────────
+
+def _in_domestic_season() -> bool:
+    """True between 1 Aug and 1 Jun (inclusive) — the domestic football season."""
+    from datetime import date
+    today = date.today()
+    m, d = today.month, today.day
+    # Aug–Dec and Jan–May are always in-season; Jun 1 is the last allowed day.
+    return m in range(8, 13) or m in range(1, 6) or (m == 6 and d == 1)
+
+
 # ── Main job ──────────────────────────────────────────────────────────────────
 
 def run_collection_crew() -> None:
@@ -83,6 +96,11 @@ def run_collection_crew() -> None:
     logger.info(separator)
     logger.info(f"RUN START [DOMESTIC]  {run_ts}")
     logger.info(separator)
+
+    if not _in_domestic_season():
+        logger.info("Outside domestic season window (Aug 1 – Jun 1). Skipping.")
+        logger.info(f"RUN END    {run_ts}  STATUS=SKIPPED (off-season)")
+        return
 
     # Pre-flight: avoid spinning up agents if Sofascore is blocked
     if not _sofascore_accessible():
@@ -174,7 +192,7 @@ def main() -> None:
 
     scheduler.add_job(
         run_collection_crew,
-        trigger=CronTrigger(day_of_week="mon,fri", hour=8, minute=0),
+        trigger=CronTrigger(day_of_week="tue,fri", hour=8, minute=0),
         id="football_data_collection",
         name="Football Data Collection (LaLiga + Premier League + Serie A)",
         misfire_grace_time=3600,
@@ -184,7 +202,11 @@ def main() -> None:
 
     scheduler.add_job(
         run_worldcup_crew,
-        trigger=CronTrigger(hour=9, minute=0),   # every day
+        trigger=CronTrigger(
+            hour=9, minute=0,
+            start_date="2026-06-11 09:00:00",
+            end_date="2026-07-20 23:59:59",
+        ),
         id="worldcup_data_collection",
         name="World Cup 2026 Daily Data Collection",
         misfire_grace_time=3600,
@@ -193,8 +215,8 @@ def main() -> None:
     )
 
     logger.info("Football Data Collection Scheduler started.")
-    logger.info("Schedule (domestic)  : every Monday and Friday at 08:00 Europe/Madrid")
-    logger.info("Schedule (World Cup) : every day at 09:00 Europe/Madrid")
+    logger.info("Schedule (domestic)  : Tue + Fri at 08:00 Europe/Madrid  [Aug 1 – Jun 1]")
+    logger.info("Schedule (World Cup) : daily at 09:00 Europe/Madrid  [Jun 11 – Jul 20 2026]")
     logger.info("Log file : %s", _LOG_DIR / "agent_runs.log")
     logger.info("Press Ctrl+C to stop.")
 
