@@ -26,7 +26,11 @@ TRAINING_PIPELINE = [
     ("train_over_under_corners", "train/train_over_under_corners.py", "Over/Under Corners"),
 ]
 
-_VALID_SCRIPT_NAMES = {name for name, _, _ in TRAINING_PIPELINE}
+WORLDCUP_TRAINING_PIPELINE = [
+    ("train_qualy", "train/train_qualy.py", "1X2 + Over/Under (World Cup / Qualifiers)"),
+]
+
+_VALID_SCRIPT_NAMES = {name for name, _, _ in TRAINING_PIPELINE + WORLDCUP_TRAINING_PIPELINE}
 
 
 def _training_env() -> dict:
@@ -83,8 +87,9 @@ def run_training_script(script_name: str) -> dict:
       error        — exception message if the subprocess could not be started
     """
     # Look up description
+    all_pipelines = TRAINING_PIPELINE + WORLDCUP_TRAINING_PIPELINE
     description = next(
-        (desc for name, _, desc in TRAINING_PIPELINE if name == script_name),
+        (desc for name, _, desc in all_pipelines if name == script_name),
         script_name,
     )
 
@@ -99,7 +104,7 @@ def run_training_script(script_name: str) -> dict:
             ),
         }
 
-    script_path = next(path for name, path, _ in TRAINING_PIPELINE if name == script_name)
+    script_path = next(path for name, path, _ in all_pipelines if name == script_name)
     full_path = _TRAINING_DIR / script_path
 
     try:
@@ -134,6 +139,20 @@ def run_training_script(script_name: str) -> dict:
             "stdout": "", "stderr": "",
             "error": str(exc),
         }
+
+
+@tool("get_worldcup_training_pipeline")
+def get_worldcup_training_pipeline() -> list:
+    """
+    Returns the ordered list of training scripts for World Cup / international
+    qualifier models. Run this before calling run_training_script.
+
+    Returns a list of dicts: [{step, script_name, description}]
+    """
+    return [
+        {"step": i + 1, "script_name": name, "description": desc}
+        for i, (name, _, desc) in enumerate(WORLDCUP_TRAINING_PIPELINE)
+    ]
 
 
 @tool("get_training_pipeline")

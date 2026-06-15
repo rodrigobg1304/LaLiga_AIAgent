@@ -1,14 +1,11 @@
 """
-CrewAI crew for daily World Cup 2026 data collection.
+CrewAI crew for daily World Cup 2026 data collection + model retraining.
 
-Two agents collaborate in sequence:
-  1. monitor_agent  — pre-flight Sofascore API health check
-  2. fetcher_agent  — collects ALL available rounds via collect_tournaments.py
-
-The World Cup uses knockout + group-stage rounds with slug identifiers
-(e.g. 'round-of-32', 'quarterfinals'), so round detection via MAX(Round)+1
-is not applicable. Instead, --all-rounds is used and INSERT IGNORE in
-db_utils ensures daily runs never produce duplicates.
+Three agents collaborate in sequence:
+  1. monitor_agent   — pre-flight Sofascore API health check
+  2. fetcher_agent   — collects ALL available rounds via collect_tournaments.py
+  3. training_agent  — retrains World Cup / qualifier models (train_qualy.py)
+                       autonomously once collection finishes
 
 Run via main.py (scheduled daily at 09:00 Europe/Madrid) or directly:
     python worldcup_crew.py
@@ -18,6 +15,7 @@ from crewai import Agent, Task, Crew, Process, LLM
 
 from tools.sofascore_health_tool import check_sofascore_health
 from tools.subprocess_tool import collect_tournament_rounds
+from tools.training_tool import get_worldcup_training_pipeline, run_training_script
 
 # 2026 World Cup: Sofascore tournament ID 16, season ID 58210
 WORLDCUP_LEAGUE_ID = 16
@@ -72,6 +70,27 @@ def build_worldcup_crew() -> Crew:
         max_iter=3,
     )
 
+    training_agent = Agent(
+        role="World Cup Model Trainer",
+        goal=(
+            "Retrain the World Cup and qualifier ML models (1X2 + Over/Under) "
+            "autonomously every day after data collection completes."
+        ),
+        backstory=(
+            "You are an ML engineer keeping the international prediction models up to date. "
+            "After the fetcher finishes, you run train_qualy.py which retrains all "
+            "World Cup and qualifier models: 1X2, Over/Under Goals, Saves, and Corners. "
+            "You work autonomously — no confirmation needed, no steps skipped. "
+            "Even if collection found no new matches today, you still retrain so the "
+            "models reflect any manual DB changes."
+        ),
+        tools=[get_worldcup_training_pipeline, run_training_script],
+        llm=llm,
+        verbose=True,
+        allow_delegation=False,
+        max_iter=5,
+    )
+
     # ── Tasks ─────────────────────────────────────────────────────────────────
 
     validation_task = Task(
@@ -103,11 +122,28 @@ def build_worldcup_crew() -> Crew:
         context=[validation_task],
     )
 
+    training_task = Task(
+        description=(
+            "The fetcher has finished. This is your signal to retrain the World Cup models.\n\n"
+            "Step 1: Call get_worldcup_training_pipeline to get the list of scripts.\n\n"
+            "Step 2: For each script (in order), call run_training_script with its script_name. "
+            "Do not skip any script. If one fails, log the error and continue.\n\n"
+            "Step 3: Report a final summary with: scripts run, succeeded vs failed, "
+            "and the last lines of stdout for each script."
+        ),
+        expected_output=(
+            "Training summary: scripts run, succeeded/failed count, "
+            "per-script name + success status + last stdout lines."
+        ),
+        agent=training_agent,
+        context=[fetch_worldcup_task],
+    )
+
     # ── Crew ──────────────────────────────────────────────────────────────────
 
     return Crew(
-        agents=[monitor_agent, fetcher_agent],
-        tasks=[validation_task, fetch_worldcup_task],
+        agents=[monitor_agent, fetcher_agent, training_agent],
+        tasks=[validation_task, fetch_worldcup_task, training_task],
         process=Process.sequential,
         verbose=True,
     )
