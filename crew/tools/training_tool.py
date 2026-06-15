@@ -107,9 +107,14 @@ def run_training_script(script_name: str) -> dict:
     script_path = next(path for name, path, _ in all_pipelines if name == script_name)
     full_path = _TRAINING_DIR / script_path
 
+    # train_qualy.py requires explicit league and qualifier arguments
+    extra_args = []
+    if script_name == "train_qualy":
+        extra_args = ["--league", "11", "16", "--qualifier", "11"]
+
     try:
         result = subprocess.run(
-            [sys.executable, str(full_path)],
+            [sys.executable, str(full_path)] + extra_args,
             capture_output=True,
             text=True,
             cwd=str(_TRAINING_DIR),
