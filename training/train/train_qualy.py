@@ -358,12 +358,8 @@ def calculate_form_features(df: pd.DataFrame) -> pd.DataFrame:
     team_history: dict = {}
     home_forms, away_forms = [], []
 
-    # Precompute the most recent season to determine source weights
     current_season = df['season'].max()
-
-    # Tournament points tracker: (team, season) -> cumulative points
     tournament_points: dict = {}
-
     home_tourn_pts_list: list = []
     away_tourn_pts_list: list = []
 
@@ -371,9 +367,9 @@ def calculate_form_features(df: pd.DataFrame) -> pd.DataFrame:
         home, away = row['home_team'], row['away_team']
         result = row['result']
         season = row['season']
-        is_wc = (int(row.get('is_qualifier', 1)) == 0)
-        is_current = (season == current_season and is_wc)
-        is_prev_wc = (season != current_season and is_wc)
+        is_neutral = (int(row.get('is_qualifier', 1)) == 0)  # WC/Euros = neutral ground
+        is_current  = (season == current_season and is_neutral)
+        is_prev_wc  = (season != current_season and is_neutral)
 
         if is_current:
             src_w = WEIGHT_CURRENT_WC
@@ -384,12 +380,17 @@ def calculate_form_features(df: pd.DataFrame) -> pd.DataFrame:
 
         for t in (home, away):
             if t not in team_history:
-                team_history[t] = {'home': [], 'away': []}
+                team_history[t] = {'home': [], 'away': [], 'neutral': []}
 
-        home_forms.append(_calc_team_form(team_history[home]['home']))
-        away_forms.append(_calc_team_form(team_history[away]['away']))
+        # Neutral venue: use combined neutral history for both teams so
+        # there is no artificial home/away role asymmetry in the form features.
+        if is_neutral:
+            home_forms.append(_calc_team_form(team_history[home]['neutral']))
+            away_forms.append(_calc_team_form(team_history[away]['neutral']))
+        else:
+            home_forms.append(_calc_team_form(team_history[home]['home']))
+            away_forms.append(_calc_team_form(team_history[away]['away']))
 
-        # Record tournament points BEFORE this match is processed
         home_tourn_pts_list.append(tournament_points.get((home, season), 0))
         away_tourn_pts_list.append(tournament_points.get((away, season), 0))
 
@@ -397,7 +398,7 @@ def calculate_form_features(df: pd.DataFrame) -> pd.DataFrame:
             ('home', home, 'home', 'home_goals', 'away_goals', '1'),
             ('away', away, 'away', 'away_goals', 'home_goals', '2'),
         ]:
-            team_history[team][side_key].append({
+            entry = {
                 'goals_for':       row[goals_for],
                 'goals_against':   row[goals_against],
                 'points':          3 if result == res_win else (1 if result == 'X' else 0),
@@ -413,7 +414,13 @@ def calculate_form_features(df: pd.DataFrame) -> pd.DataFrame:
                 'blocked_shots':   row.get(f'{role}_blocked_shots', np.nan),
                 'xg':              row.get(f'{role}_xg', np.nan),
                 'src_w':           src_w,
-            })
+            }
+            if is_neutral:
+                # Neutral match: update combined neutral bucket for both teams
+                team_history[team]['neutral'].append(entry)
+            else:
+                # Qualifier: role-specific bucket preserves home/away advantage signal
+                team_history[team][side_key].append(entry)
 
         # Update tournament points AFTER appending to history (cumulative)
         home_goals = int(row['home_goals']) if row['home_goals'] is not None else 0

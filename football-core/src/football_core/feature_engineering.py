@@ -902,12 +902,30 @@ def build_features_qualy(home_team: str, away_team: str, year: Optional[str],
     historical averages.
     """
     # Construir las 40 features base con el año real (formato internacional "2026")
-    # → ELO correcto (caché global incluye partidos internacionales)
-    # → Stats de equipo desde BD filtradas por años del ciclo internacional
-    # → H2H basado en enfrentamientos históricos entre las selecciones
     features_40 = build_features_1x2(home_team, away_team, year=year, league_id=league_id)
 
-    # Blend current tournament form for international leagues
+    # ── Terreno neutral (is_qualifier=0: Mundial, Eurocopa…) ──────────────────
+    # No existe ventaja de campo: simetrizamos las stats de rol local/visitante
+    # para que cada equipo reciba su rendimiento GLOBAL (home+away promediados).
+    # Posiciones home[3:16] y away[16:29] se promedian cruzando ambas llamadas.
+    if is_qualifier == 0:
+        features_40_rev = build_features_1x2(away_team, home_team, year=year, league_id=league_id)
+        f     = features_40.flatten()
+        f_rev = features_40_rev.flatten()
+        f_sym = f.copy()
+        # team1 overall = avg(home role de f, away role de f_rev)
+        f_sym[3:16]  = (f[3:16]  + f_rev[16:29]) / 2
+        # team2 overall = avg(away role de f, home role de f_rev)
+        f_sym[16:29] = (f[16:29] + f_rev[3:16])  / 2
+        # Recompute balance features
+        f_sym[35] = abs(f_sym[3]  - f_sym[16])
+        f_sym[36] = abs(f_sym[4]  - f_sym[17])
+        f_sym[37] = abs(f_sym[8]  - f_sym[21])
+        f_sym[38] = abs(f_sym[9]  - f_sym[22])
+        f_sym[39] = abs(f_sym[7]  - f_sym[20])
+        features_40 = f_sym.reshape(1, -1)
+
+    # Blend current tournament form (credibility-weighted)
     if year:
         home_tourn = get_current_tournament_averages(home_team, league_id, year)
         away_tourn = get_current_tournament_averages(away_team, league_id, year)
@@ -915,9 +933,18 @@ def build_features_qualy(home_team: str, away_team: str, year: Optional[str],
             features_40 = _blend_tournament_stats(features_40, home_tourn, away_tourn)
 
     # xG features: average Expected Goals from last 5 appearances in recent cycles
+    # For neutral venues use overall xG (avg of both roles)
     recent_years = get_recent_years(year) if year else []
-    home_xg = get_team_xg_average(home_team, 'home', league_id, recent_years, n=5)
-    away_xg = get_team_xg_average(away_team, 'away', league_id, recent_years, n=5)
+    if is_qualifier == 0:
+        home_xg_h = get_team_xg_average(home_team, 'home', league_id, recent_years, n=5)
+        home_xg_a = get_team_xg_average(home_team, 'away', league_id, recent_years, n=5)
+        home_xg   = (home_xg_h + home_xg_a) / 2 if (home_xg_h or home_xg_a) else 0.0
+        away_xg_h = get_team_xg_average(away_team, 'home', league_id, recent_years, n=5)
+        away_xg_a = get_team_xg_average(away_team, 'away', league_id, recent_years, n=5)
+        away_xg   = (away_xg_h + away_xg_a) / 2 if (away_xg_h or away_xg_a) else 0.0
+    else:
+        home_xg = get_team_xg_average(home_team, 'home', league_id, recent_years, n=5)
+        away_xg = get_team_xg_average(away_team, 'away', league_id, recent_years, n=5)
 
     # Current tournament accumulated points (0 if no data)
     home_pts = get_team_current_tournament_points(home_team, league_id, year) if year else 0
