@@ -1,15 +1,13 @@
 """
 Daily notification pipeline.
 
-Queries upcoming matches in the next 24h, gets predictions from the prediction
-service, and sends a Telegram message with all the info.
+At 10:00 each day:
+  1. Refresh fixtures for rounds with placeholder team names (e.g. '2a', 'w73')
+  2. Show yesterday's results vs predictions
+  3. Show upcoming matches (next 24h) with predictions
 
-Usage:
-    cd scripts
-    python daily_pipeline.py
-
-Schedule with cron at 09:00 every day:
-    0 9 * * * cd /path/to/project/scripts && python daily_pipeline.py >> logs/daily_pipeline.log 2>&1
+Schedule:
+    0 10 * * * cd /scripts && DB_... python daily_pipeline.py >> logs/daily_pipeline.log 2>&1
 
 Required env vars (in scripts/.env or shell):
     DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_DATABASE
@@ -18,6 +16,7 @@ Required env vars (in scripts/.env or shell):
     TELEGRAM_CHAT_ID
 """
 import os
+import re
 import sys
 import requests
 from datetime import datetime, timedelta
@@ -54,11 +53,149 @@ OUTCOME_EMOJI  = {"1": "🏠",    "X": "🤝",      "2": "✈️"}
 
 
 # ─────────────────────────────────────────────
+# Fixture refresh (Point 2)
+# ─────────────────────────────────────────────
+
+def _is_placeholder(name: str) -> bool:
+    """Detects Sofascore placeholder names: '2a', 'w73', 'g1', '3a3b3c3d3f', etc."""
+    return bool(re.match(r'^(\d|[wg]\d)', name or ""))
+
+
+def refresh_upcoming_fixtures():
+    """
+    Re-fetches fixture metadata from Sofascore for rounds that still have
+    placeholder team names (e.g. 'w73', '2a', 'g1'). Safe to call daily —
+    uses ON DUPLICATE KEY UPDATE so no data is lost.
+    """
+    sql = f"""
+        SELECT DISTINCT LeagueId, SeasonId, Round
+        FROM {MATCHES_TABLE}
+        WHERE homeScore IS NULL
+          AND (homeTeam REGEXP '^[0-9]|^[wg][0-9]'
+               OR awayTeam  REGEXP '^[0-9]|^[wg][0-9]')
+        ORDER BY LeagueId, SeasonId, Round
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor(dictionary=True) as cur:
+            cur.execute(sql)
+            rounds = cur.fetchall()
+    finally:
+        conn.close()
+
+    if not rounds:
+        return
+
+    try:
+        from sofascore_client import collect_round_fixtures
+        from db_utils import insert_match_metadata
+    except ImportError:
+        print("  [fixtures] sofascore_client not available — skipping refresh")
+        return
+
+    for r in rounds:
+        lid, sid, rnd = r["LeagueId"], r["SeasonId"], r["Round"]
+        print(f"  [fixtures] Refreshing league={lid} season={sid} round={rnd}")
+        try:
+            fixtures = collect_round_fixtures(lid, sid, rnd)
+            if fixtures:
+                inserted = insert_match_metadata(fixtures)
+                known = sum(1 for f in fixtures if not _is_placeholder(f.get("homeTeam", "")))
+                print(f"    → {len(fixtures)} fixtures, {known} with real names, {inserted} rows updated")
+        except Exception as e:
+            print(f"    → Error: {e}")
+
+
+# ─────────────────────────────────────────────
+# Yesterday's results (Point 3)
+# ─────────────────────────────────────────────
+
+def get_yesterday_results() -> list[dict]:
+    """Returns matches that finished in the last 36 hours."""
+    cutoff_end   = datetime.now()
+    cutoff_start = cutoff_end - timedelta(hours=36)
+    sql = f"""
+        SELECT MatchId, LeagueId, Round, homeTeam, awayTeam,
+               MatchDateLocal, homeScore, awayScore, SeasonId
+        FROM {MATCHES_TABLE}
+        WHERE homeScore IS NOT NULL
+          AND MatchDateLocal BETWEEN %s AND %s
+        ORDER BY MatchDateLocal ASC
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor(dictionary=True) as cur:
+            cur.execute(sql, (cutoff_start, cutoff_end))
+            return cur.fetchall()
+    finally:
+        conn.close()
+
+
+def _actual_outcome(home_score: int, away_score: int) -> str:
+    if home_score > away_score:
+        return "1"
+    if home_score < away_score:
+        return "2"
+    return "X"
+
+
+def build_yesterday_block(results: list[dict], year_cache: dict) -> str:
+    if not results:
+        return ""
+
+    lines = ["📊 <b>Resultados de ayer</b>", "━━━━━━━━━━━━━━━━━━━━━━"]
+
+    correct = 0
+    total_pred_goals = 0.0
+    total_real_goals = 0
+
+    for m in results:
+        lid  = str(m["LeagueId"])
+        year = year_cache.get(lid)
+        home = _fmt_team(m["homeTeam"])
+        away = _fmt_team(m["awayTeam"])
+        hs, as_ = int(m["homeScore"]), int(m["awayScore"])
+        actual = _actual_outcome(hs, as_)
+        total_real_goals += hs + as_
+
+        pred = get_prediction(m["homeTeam"], m["awayTeam"], lid, year)
+
+        if pred:
+            resultado = pred.get("resultado", {})
+            probs = resultado.get("probabilities", {})
+            predicted = resultado.get("predicted", "?")
+            best_prob = probs.get(predicted, 0)
+            hit = "✅" if predicted == actual else "❌"
+            if predicted == actual:
+                correct += 1
+
+            pred_emoji = OUTCOME_EMOJI.get(predicted, "")
+            ou = pred.get("over_under_goals", {})
+            eg_h, eg_a = _expected_goals_split(ou, probs.get("1", 0), probs.get("X", 0), probs.get("2", 0))
+            total_pred_goals += eg_h + eg_a
+
+            lines.append(
+                f"{hit} {home} <b>{hs}-{as_}</b> {away}  "
+                f"({pred_emoji}{OUTCOME_LABELS.get(predicted, predicted)} {best_prob:.0f}%  "
+                f"⚽~{eg_h+eg_a:.1f})"
+            )
+        else:
+            actual_emoji = OUTCOME_EMOJI.get(actual, "")
+            lines.append(f"⬜ {home} <b>{hs}-{as_}</b> {away}  ({actual_emoji})")
+
+    n_pred = sum(1 for m in results if get_prediction is not None)
+    pct = f"{correct}/{len(results)}" if results else "0/0"
+    avg_goals = f"{total_pred_goals/len(results):.1f}" if results else "—"
+    lines.append(f"<i>Aciertos: {pct} · Goles pred ~{avg_goals} vs real {total_real_goals/len(results):.1f}</i>")
+
+    return "\n".join(lines)
+
+
+# ─────────────────────────────────────────────
 # DB helpers
 # ─────────────────────────────────────────────
 
 def get_matches_next_24h() -> list[dict]:
-    """Returns upcoming unplayed matches with kick-off in the next 24 hours (local time)."""
     now = datetime.now()
     cutoff = now + timedelta(hours=24)
     sql = f"""
@@ -67,6 +204,8 @@ def get_matches_next_24h() -> list[dict]:
         FROM {MATCHES_TABLE}
         WHERE homeScore IS NULL
           AND MatchDateLocal BETWEEN %s AND %s
+          AND homeTeam NOT REGEXP '^[0-9]|^[wg][0-9]'
+          AND awayTeam  NOT REGEXP '^[0-9]|^[wg][0-9]'
         ORDER BY MatchDateLocal ASC
     """
     conn = get_connection()
@@ -79,7 +218,6 @@ def get_matches_next_24h() -> list[dict]:
 
 
 def get_current_year_for_league(league_id: str) -> str | None:
-    """Returns the most recent season year recorded in the DB for this league."""
     sql = f"""
         SELECT Year FROM {LEAGUES_TABLE}
         WHERE leagueId = %s
@@ -98,15 +236,9 @@ def get_current_year_for_league(league_id: str) -> str | None:
 
 
 def get_team_tournament_stats(team: str, league_id: str, year: str) -> dict:
-    """
-    Returns actual observed averages for a team in the given tournament/year.
-    Queries both home and away appearances and returns role-agnostic averages.
-    Stats: goalkeeper saves and corner kicks.
-    """
     sql = f"""
         SELECT
-            matchId,
-            homeTeam, awayTeam,
+            matchId, homeTeam, awayTeam,
             MAX(CASE WHEN name = 'Goalkeeper saves' THEN
                 CASE WHEN homeTeam = %s THEN CAST(homeValue AS DECIMAL(6,2))
                      ELSE CAST(awayValue AS DECIMAL(6,2)) END
@@ -130,15 +262,13 @@ def get_team_tournament_stats(team: str, league_id: str, year: str) -> dict:
 
     if not rows:
         return {}
-
-    saves  = [r["gk_saves"]  for r in rows if r["gk_saves"]  is not None]
-    crnrs  = [r["corners"]   for r in rows if r["corners"]   is not None]
-    n      = len(rows)
-
+    saves = [r["gk_saves"] for r in rows if r["gk_saves"] is not None]
+    crnrs = [r["corners"]  for r in rows if r["corners"]  is not None]
+    n = len(rows)
     return {
-        "n_matches":    n,
-        "saves_avg":    round(sum(saves) / len(saves), 1) if saves else None,
-        "corners_avg":  round(sum(crnrs) / len(crnrs), 1) if crnrs else None,
+        "n_matches":   n,
+        "saves_avg":   round(sum(saves) / len(saves), 1) if saves else None,
+        "corners_avg": round(sum(crnrs) / len(crnrs), 1) if crnrs else None,
     }
 
 
@@ -166,18 +296,18 @@ def get_prediction(home_team: str, away_team: str, league_id: str, year: str | N
 # ─────────────────────────────────────────────
 
 def _fmt_team(slug: str) -> str:
-    """'dr-congo' → 'DR Congo', 'bosnia-and-herzegovina' → 'Bosnia y Herz.'"""
     replacements = {
-        "dr-congo":                  "DR Congo",
-        "bosnia-and-herzegovina":    "Bosnia y Herz.",
-        "south-korea":               "Corea del Sur",
-        "south-africa":              "Sudáfrica",
-        "saudi-arabia":              "Arabia Saudí",
-        "cote-divoire":              "Costa de Marfil",
-        "cape-verde":                "Cabo Verde",
-        "new-zealand":               "Nueva Zelanda",
-        "czech-republic":            "Rep. Checa",
-        "usa":                       "EE.UU.",
+        "dr-congo":               "DR Congo",
+        "bosnia-and-herzegovina": "Bosnia y Herz.",
+        "south-korea":            "Corea del Sur",
+        "south-africa":           "Sudáfrica",
+        "saudi-arabia":           "Arabia Saudí",
+        "cote-divoire":           "Costa de Marfil",
+        "cape-verde":             "Cabo Verde",
+        "new-zealand":            "Nueva Zelanda",
+        "czech-republic":         "Rep. Checa",
+        "usa":                    "EE.UU.",
+        "curacao":                "Curaçao",
     }
     if slug in replacements:
         return replacements[slug]
@@ -189,118 +319,68 @@ def _key_to_float(key: str) -> float:
 
 
 def _top2_ou(ou_data: dict, multiplier: float = 1.0) -> str:
-    """Returns the two highest thresholds where over >= 50%, or the under when none qualify."""
     if not ou_data:
         return "—"
-
     sorted_keys = sorted(ou_data.keys(), key=_key_to_float)
 
     def get_over_pct(k) -> float:
         v = ou_data[k]
-        if isinstance(v, dict):
-            return v.get("over", 0)
-        return v * multiplier
+        return v.get("over", 0) if isinstance(v, dict) else v * multiplier
 
     above = [k for k in sorted_keys if get_over_pct(k) >= 50]
-
     if above:
-        parts = []
-        for k in above[-2:]:           # last 2 (highest thresholds still ≥50%)
-            t = _key_to_float(k)
-            pct = get_over_pct(k)
-            parts.append(f"+{t:.1f} ({pct:.0f}%)")
+        parts = [f"+{_key_to_float(k):.1f} ({get_over_pct(k):.0f}%)" for k in above[-2:]]
         return " · ".join(parts)
 
-    # All below 50% → show under for lowest threshold
     k = sorted_keys[0]
-    t = _key_to_float(k)
-    under_pct = 100 - get_over_pct(k)
-    return f"-{t:.1f} ({under_pct:.0f}%)"
+    return f"-{_key_to_float(k):.1f} ({100 - get_over_pct(k):.0f}%)"
 
 
-def _expected_goals(ou_goals: dict) -> tuple[float, float]:
-    """
-    Estimates total expected goals using sum of over-probabilities, then splits
-    home/away by 50/50 (no per-team goal model available).
-    Returns (total, None) — caller decides how to use it.
-    """
+def _expected_goals_split(ou_goals: dict, p1: float, px: float, p2: float) -> tuple[float, float]:
     total = sum(
         (v.get("over", 0) / 100 if isinstance(v, dict) else v)
         for v in ou_goals.values()
     )
-    return total
+    denom = p1 + px + p2 or 1
+    home_share = (p1 + 0.45 * px) / denom
+    return round(total * home_share, 1), round(total * (1 - home_share), 1)
 
 
-def _expected_goals_split(ou_goals: dict, p1: float, px: float, p2: float) -> tuple[float, float]:
-    """
-    Splits total expected goals between home and away using 1X2 probabilities.
-    Home share ≈ (p1 + 0.45*px) / 100, away share ≈ (p2 + 0.45*px) / 100.
-    """
-    total = _expected_goals(ou_goals)
-    home_share = (p1 + 0.45 * px) / (p1 + px + p2)
-    away_share = 1.0 - home_share
-    return round(total * home_share, 1), round(total * away_share, 1)
+def _saves_corners_lines(pred: dict, home_stats: dict, away_stats: dict) -> tuple[str, str]:
+    def _fmt(val, label):
+        return f"{val:.1f} {label}/p" if val is not None else "—"
+
+    h_saves   = home_stats.get("saves_avg")
+    a_saves   = away_stats.get("saves_avg")
+    h_corners = home_stats.get("corners_avg")
+    a_corners = away_stats.get("corners_avg")
+    n = max(home_stats.get("n_matches", 0), away_stats.get("n_matches", 0))
+
+    if h_saves is not None or a_saves is not None:
+        tag = f"({n}p)"
+        return (
+            f"🧤 <b>Paradas</b> {tag}:  🏠 {_fmt(h_saves,'par')}  ·  ✈️ {_fmt(a_saves,'par')}",
+            f"📐 <b>Córners</b> {tag}:  🏠 {_fmt(h_corners,'cor')}  ·  ✈️ {_fmt(a_corners,'cor')}",
+        )
+
+    saves   = pred.get("saves", {})
+    corners = pred.get("corners", {})
+    return (
+        f"🧤 <b>Paradas:</b>  🏠 {_top2_ou(saves.get('home',{}), 100)}  ·  ✈️ {_top2_ou(saves.get('away',{}), 100)}",
+        f"📐 <b>Córners:</b>  🏠 {_top2_ou(corners.get('home',{}), 100)}  ·  ✈️ {_top2_ou(corners.get('away',{}), 100)}",
+    )
 
 
 # ─────────────────────────────────────────────
 # Match block
 # ─────────────────────────────────────────────
 
-def _saves_corners_lines(pred: dict, home_stats: dict, away_stats: dict) -> tuple[str, str]:
-    """
-    Returns (saves_line, corners_line).
-    Priority: use actual tournament observed stats when available.
-    Falls back to model predictions only if no observed data exists AND the model
-    shows meaningful variance (std > 0.01 across random inputs — a collapsed model
-    like the qualy saves model is silently skipped).
-    """
-    def _fmt_stat(val, label) -> str:
-        if val is None:
-            return "—"
-        return f"{val:.1f} {label}/p"
-
-    # ── Observed tournament stats (preferred) ────────────────────────────────
-    h_saves   = home_stats.get("saves_avg")
-    a_saves   = away_stats.get("saves_avg")
-    h_corners = home_stats.get("corners_avg")
-    a_corners = away_stats.get("corners_avg")
-    h_n       = home_stats.get("n_matches", 0)
-    a_n       = away_stats.get("n_matches", 0)
-
-    have_observed = h_saves is not None or a_saves is not None
-
-    if have_observed:
-        h_sv  = _fmt_stat(h_saves,   "par")
-        a_sv  = _fmt_stat(a_saves,   "par")
-        h_cr  = _fmt_stat(h_corners, "cor")
-        a_cr  = _fmt_stat(a_corners, "cor")
-        tag   = f"({max(h_n, a_n)}p)"
-        saves_line   = f"🧤 <b>Paradas</b> {tag}:  🏠 {h_sv}  ·  ✈️ {a_sv}"
-        corners_line = f"📐 <b>Córners</b> {tag}:  🏠 {h_cr}  ·  ✈️ {a_cr}"
-        return saves_line, corners_line
-
-    # ── Model predictions fallback ────────────────────────────────────────────
-    saves   = pred.get("saves", {})
-    corners = pred.get("corners", {})
-    sh = _top2_ou(saves.get("home",   {}), multiplier=100)
-    sa = _top2_ou(saves.get("away",   {}), multiplier=100)
-    ch = _top2_ou(corners.get("home", {}), multiplier=100)
-    ca = _top2_ou(corners.get("away", {}), multiplier=100)
-    saves_line   = f"🧤 <b>Paradas:</b>  🏠 {sh}  ·  ✈️ {sa}"
-    corners_line = f"📐 <b>Córners:</b>  🏠 {ch}  ·  ✈️ {ca}"
-    return saves_line, corners_line
-
-
 def format_match_block(match: dict, pred: dict | None,
                        home_stats: dict = None, away_stats: dict = None) -> str:
     kick_off = match["MatchDateLocal"]
     time_str = kick_off.strftime("%H:%M") if isinstance(kick_off, datetime) else str(kick_off)
-
-    home_raw = match["homeTeam"]
-    away_raw = match["awayTeam"]
-    home = _fmt_team(home_raw)
-    away = _fmt_team(away_raw)
-
+    home = _fmt_team(match["homeTeam"])
+    away = _fmt_team(match["awayTeam"])
     header = f"🕐 <b>{time_str}</b>  {home} 🆚 {away}"
 
     if pred is None:
@@ -315,29 +395,23 @@ def format_match_block(match: dict, pred: dict | None,
     p1 = probs.get("1", 0)
     px = probs.get("X", 0)
     p2 = probs.get("2", 0)
-    o1 = odds.get("1", 0)
-    ox = odds.get("X", 0)
-    o2 = odds.get("2", 0)
 
     best = max(probs, key=lambda k: probs.get(k, 0)) if probs else "?"
-    best_emoji = OUTCOME_EMOJI.get(best, "")
-    best_label = OUTCOME_LABELS.get(best, best)
-
-    line_1x2  = f"🏆 <b>1X2</b>  🏠 {p1:.0f}% ({o1}) · 🤝 {px:.0f}% ({ox}) · ✈️ {p2:.0f}% ({o2})"
-    line_best = f"🎯 Pronóstico: {best_emoji} <b>{best_label}</b> — {conf_label}"
-
-    # Over/Under goals (model works well here)
-    ou_goals = pred.get("over_under_goals", {})
-    goals_tag = _top2_ou(ou_goals, multiplier=1)
-    eg_home, eg_away = _expected_goals_split(ou_goals, p1, px, p2)
-    line_goals = f"⚽ <b>Goles:</b> {goals_tag}  |  🏠~{eg_home} · ✈️~{eg_away}"
-
-    # Saves and corners: observed stats when available, model otherwise
-    saves_line, corners_line = _saves_corners_lines(
-        pred,
-        home_stats or {},
-        away_stats or {},
+    line_1x2 = (
+        f"🏆 <b>1X2</b>  🏠 {p1:.0f}% ({odds.get('1',0)}) · "
+        f"🤝 {px:.0f}% ({odds.get('X',0)}) · "
+        f"✈️ {p2:.0f}% ({odds.get('2',0)})"
     )
+    line_best = (
+        f"🎯 Pronóstico: {OUTCOME_EMOJI.get(best,'')} "
+        f"<b>{OUTCOME_LABELS.get(best, best)}</b> — {conf_label}"
+    )
+
+    ou_goals = pred.get("over_under_goals", {})
+    eg_h, eg_a = _expected_goals_split(ou_goals, p1, px, p2)
+    line_goals = f"⚽ <b>Goles:</b> {_top2_ou(ou_goals, 1)}  |  🏠~{eg_h} · ✈️~{eg_a}"
+
+    saves_line, corners_line = _saves_corners_lines(pred, home_stats or {}, away_stats or {})
 
     return "\n".join([header, line_1x2, line_best, line_goals, saves_line, corners_line])
 
@@ -346,10 +420,14 @@ def format_match_block(match: dict, pred: dict | None,
 # Full message
 # ─────────────────────────────────────────────
 
-def build_telegram_message(matches: list[dict], predictions: dict,
-                           team_stats: dict) -> str:
+def build_telegram_message(yesterday_block: str, matches: list[dict],
+                           predictions: dict, team_stats: dict) -> str:
     now_str = datetime.now().strftime("%d/%m/%Y — %H:%M")
     lines = [f"📅 <b>{now_str}</b>", ""]
+
+    if yesterday_block:
+        lines.append(yesterday_block)
+        lines.append("")
 
     by_league: dict[str, list[dict]] = {}
     for m in matches:
@@ -362,13 +440,14 @@ def build_telegram_message(matches: list[dict], predictions: dict,
     for lid, league_matches in by_league.items():
         emoji = LEAGUE_EMOJI.get(lid, "⚽")
         name  = LEAGUE_NAMES.get(lid, f"Liga {lid}")
-        lines.append(f"{emoji} <b>{name}</b>")
-        lines.append("━━━━━━━━━━━━━━━━━━━━━━")
+        lines += [f"{emoji} <b>{name}</b>", "━━━━━━━━━━━━━━━━━━━━━━"]
         for m in league_matches:
-            pred       = predictions.get(m["MatchId"])
-            h_stats    = team_stats.get(m["homeTeam"], {})
-            a_stats    = team_stats.get(m["awayTeam"], {})
-            lines.append(format_match_block(m, pred, h_stats, a_stats))
+            lines.append(format_match_block(
+                m,
+                predictions.get(m["MatchId"]),
+                team_stats.get(m["homeTeam"], {}),
+                team_stats.get(m["awayTeam"], {}),
+            ))
             lines.append("─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─")
         lines.append("")
 
@@ -382,36 +461,52 @@ def build_telegram_message(matches: list[dict], predictions: dict,
 def run():
     print(f"[{datetime.now():%Y-%m-%d %H:%M}] Daily pipeline started")
 
+    # Point 2: refresh fixtures with real team names
+    print("  Refreshing upcoming fixtures...")
+    refresh_upcoming_fixtures()
+
+    # Point 3: yesterday's results
+    yesterday = get_yesterday_results()
+    print(f"  Yesterday's results: {len(yesterday)} matches")
+
+    year_cache: dict[str, str | None] = {}
+
+    def _get_year(lid: str) -> str | None:
+        if lid not in year_cache:
+            year_cache[lid] = get_current_year_for_league(lid)
+        return year_cache[lid]
+
+    # Pre-populate year cache from yesterday's matches
+    for m in yesterday:
+        _get_year(str(m["LeagueId"]))
+
+    yesterday_block = build_yesterday_block(yesterday, year_cache)
+
+    # Upcoming matches
     matches = get_matches_next_24h()
     print(f"  Upcoming matches (next 24h): {len(matches)}")
 
-    year_cache:  dict[str, str | None] = {}
     predictions: dict = {}
     team_stats:  dict = {}
 
     for m in matches:
-        lid = str(m["LeagueId"])
-        if lid not in year_cache:
-            year_cache[lid] = get_current_year_for_league(lid)
-        year = year_cache[lid]
-
+        lid  = str(m["LeagueId"])
+        year = _get_year(lid)
         home, away = m["homeTeam"], m["awayTeam"]
         print(f"  Predicting: {home} vs {away} (league={lid}, year={year})")
-        pred = get_prediction(home, away, lid, year)
-        predictions[m["MatchId"]] = pred
+        predictions[m["MatchId"]] = get_prediction(home, away, lid, year)
 
-        # Fetch actual tournament stats for saves/corners (replaces collapsed model)
         for team in (home, away):
             if team not in team_stats and year:
                 team_stats[team] = get_team_tournament_stats(team, lid, year)
 
-    message = build_telegram_message(matches, predictions, team_stats)
+    message = build_telegram_message(yesterday_block, matches, predictions, team_stats)
     print("\n--- Telegram message ---")
     print(message)
     print("------------------------\n")
 
     ok = send_message(message)
-    print("Telegram notification sent." if ok else "Telegram notification failed (check token/chat_id).")
+    print("Telegram notification sent." if ok else "Telegram notification failed.")
 
 
 if __name__ == "__main__":
