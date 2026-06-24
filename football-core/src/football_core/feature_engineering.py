@@ -27,6 +27,8 @@ from football_core.db import (
     get_team_goals_conceded_average,
     get_team_matches_total_goals,
     get_current_tournament_averages,
+    get_team_xg_average,
+    get_team_current_tournament_points,
 )
 
 from football_core.constants import (
@@ -883,13 +885,17 @@ def _blend_tournament_stats(features_40: np.ndarray, home_tourn: dict, away_tour
 def build_features_qualy(home_team: str, away_team: str, year: Optional[str],
                          league_id: str, is_qualifier: int) -> np.ndarray:
     """
-    Construye el vector de features (41 dimensiones) para modelos de clasificatorias.
+    Construye el vector de features (45 dimensiones) para modelos de clasificatorias.
 
     Las 40 features base son idénticas a build_features_1x2. Se pasa el año real
     en formato internacional ("2026") para que get_recent_years lo detecte y genere
     las temporadas correctas (ej: ["2026", "2022"]) al consultar la BD.
 
     Feature 41: is_qualifier (1 = partido de clasificatoria, 0 = torneo principal).
+    Feature 42: home_xg_avg (Expected Goals promedio del equipo local, últimas 5 apariciones)
+    Feature 43: away_xg_avg (Expected Goals promedio del equipo visitante, últimas 5 apariciones)
+    Feature 44: home_tournament_points (puntos acumulados en el torneo actual)
+    Feature 45: away_tournament_points (puntos acumulados en el torneo actual)
 
     Blends current tournament observed stats (credibility-weighted) into the feature
     vector so teams with real WC 2026 data are not treated identically to 4-year-old
@@ -908,5 +914,17 @@ def build_features_qualy(home_team: str, away_team: str, year: Optional[str],
         if home_tourn or away_tourn:
             features_40 = _blend_tournament_stats(features_40, home_tourn, away_tourn)
 
-    is_q = np.array([[float(is_qualifier)]], dtype=np.float64)
-    return np.hstack([features_40, is_q])
+    # xG features: average Expected Goals from last 5 appearances in recent cycles
+    recent_years = get_recent_years(year) if year else []
+    home_xg = get_team_xg_average(home_team, 'home', league_id, recent_years, n=5)
+    away_xg = get_team_xg_average(away_team, 'away', league_id, recent_years, n=5)
+
+    # Current tournament accumulated points (0 if no data)
+    home_pts = get_team_current_tournament_points(home_team, league_id, year) if year else 0
+    away_pts = get_team_current_tournament_points(away_team, league_id, year) if year else 0
+
+    extra = np.array(
+        [[float(is_qualifier), home_xg, away_xg, float(home_pts), float(away_pts)]],
+        dtype=np.float64
+    )
+    return np.hstack([features_40, extra])

@@ -638,6 +638,8 @@ def get_league_all_stats(league_id: str) -> list[dict]:
             MAX(CASE WHEN name = 'Interceptions' THEN CAST(awayValue AS SIGNED) END) as away_interceptions,
             MAX(CASE WHEN name = 'Blocked shots' THEN CAST(homeValue AS SIGNED) END) as home_blocked_shots,
             MAX(CASE WHEN name = 'Blocked shots' THEN CAST(awayValue AS SIGNED) END) as away_blocked_shots,
+            MAX(CASE WHEN name = 'Expected goals' THEN CAST(homeValue AS DECIMAL(6,2)) END) as home_xg,
+            MAX(CASE WHEN name = 'Expected goals' THEN CAST(awayValue AS DECIMAL(6,2)) END) as away_xg,
             CASE
                 WHEN MAX(CASE WHEN name = 'Goals' THEN CAST(homeValue AS SIGNED) END) >
                      MAX(CASE WHEN name = 'Goals' THEN CAST(awayValue AS SIGNED) END) THEN '1'
@@ -944,3 +946,91 @@ def get_current_tournament_averages(team: str, league_id: str, year: str) -> dic
     result.setdefault('n_away', 0)
 
     return result
+
+
+def get_team_xg_average(team: str, role: str, league_id: str,
+                        years: list, n: Optional[int] = None) -> float:
+    """
+    Returns the average Expected Goals for a team in a given role across multiple years.
+
+    Args:
+        team: team name as stored in the DB.
+        role: 'home' → homeValue when homeTeam=team; 'away' → awayValue when awayTeam=team.
+        league_id: single league ID (str).
+        years: list of year strings (e.g. ["2026", "2022"]).
+        n: if provided, limit to the last N matches.
+
+    Returns:
+        float average xG, or 0.0 if no data available.
+    """
+    team_col = "homeTeam" if role == "home" else "awayTeam"
+    stat_col = "homeValue" if role == "home" else "awayValue"
+    if not years:
+        return 0.0
+    placeholders_years = ",".join(["%s"] * len(years))
+    year_filter = f"AND Year IN ({placeholders_years})"
+    params = [team, league_id] + years
+    subquery = f"""
+        SELECT matchId,
+               SUM(CAST({stat_col} AS DECIMAL(6,2))) AS xg_value
+        FROM {TABLE}
+        WHERE {team_col} = %s
+          AND name = 'Expected goals'
+          AND LeagueId = %s
+          {year_filter}
+        GROUP BY matchId
+        ORDER BY MAX(Year) DESC, MAX(CAST(Round AS SIGNED)) DESC
+    """
+    if n is not None:
+        subquery += " LIMIT %s"
+        params.append(n)
+    sql = f"""
+        SELECT AVG(CAST(xg_value AS DECIMAL(6,2))) AS avg_xg
+        FROM ({subquery}) AS matches
+    """
+    rows = run_query(sql, tuple(params))
+    return float(rows[0]["avg_xg"]) if (rows and rows[0]["avg_xg"] is not None) else 0.0
+
+
+def get_team_current_tournament_points(team: str, league_id: str, year: str) -> int:
+    """
+    Computes the total accumulated points for a team in a specific league/year tournament.
+
+    Queries all completed matches (where Goals data is available) for the team and
+    computes: 3 pts for win, 1 pt for draw, 0 pts for loss.
+
+    Args:
+        team: team name as stored in the DB.
+        league_id: league ID string (e.g. '11' for Qualy WC Europe).
+        year: year string (e.g. '2026').
+
+    Returns:
+        int total points accumulated in the tournament so far.
+    """
+    sql = f"""
+        SELECT
+            homeTeam, awayTeam,
+            MAX(CASE WHEN name='Goals' THEN CAST(homeValue AS SIGNED) END) as home_goals,
+            MAX(CASE WHEN name='Goals' THEN CAST(awayValue AS SIGNED) END) as away_goals
+        FROM {TABLE}
+        WHERE leagueId = %s AND Year = %s
+          AND (homeTeam = %s OR awayTeam = %s)
+        GROUP BY matchId, homeTeam, awayTeam
+        HAVING home_goals IS NOT NULL AND away_goals IS NOT NULL
+    """
+    rows = run_query(sql, (league_id, year, team, team))
+    points = 0
+    for row in rows:
+        hg = int(row['home_goals']) if row['home_goals'] is not None else 0
+        ag = int(row['away_goals']) if row['away_goals'] is not None else 0
+        if row['homeTeam'] == team:
+            if hg > ag:
+                points += 3
+            elif hg == ag:
+                points += 1
+        else:  # awayTeam == team
+            if ag > hg:
+                points += 3
+            elif ag == hg:
+                points += 1
+    return points

@@ -11,6 +11,7 @@ Diferencias clave frente a los scripts de ligas domésticas:
   - Evaluación con CV-5 + holdout temporal (última campaña)
   - Entrena los 4 tipos de modelos en un solo script (1x2, goals, saves, corners)
   - Sin features específicas de Premier League
+  - 45 features: 40 estándar + is_qualifier + home/away xG avg + home/away tournament points
 
 Uso:
     cd training
@@ -106,7 +107,7 @@ WEIGHT_CURRENT_WC   = 3.0   # Matches in the same WC tournament being predicted
 WEIGHT_QUALIFIER    = 1.0   # WC qualifier matches
 WEIGHT_PREV_WC      = 0.5   # Previous WC editions
 
-# 41 features base (40 estándar + is_qualifier)
+# 45 features: 40 estándar + is_qualifier + home_xg_avg + away_xg_avg + home_tournament_points + away_tournament_points
 FEATURE_COLUMNS = [
     'elo_home', 'elo_away', 'elo_diff',
     'home_win_rate', 'home_goals_for_avg', 'home_goals_against_avg', 'home_points_avg',
@@ -121,7 +122,11 @@ FEATURE_COLUMNS = [
     'h2h_total_goals_avg', 'h2h_used_proxy',
     'elo_diff_abs', 'form_balance', 'goals_balance',
     'possession_balance', 'shots_balance', 'shots_on_target_balance',
-    'is_qualifier',   # 1 = partido de clasificatoria, 0 = partido del torneo principal
+    'is_qualifier',          # 1 = partido de clasificatoria, 0 = partido del torneo principal
+    'home_xg_avg',           # Expected goals promedio del equipo local (forma reciente)
+    'away_xg_avg',           # Expected goals promedio del equipo visitante (forma reciente)
+    'home_tournament_points', # Puntos acumulados en el torneo actual (antes de este partido)
+    'away_tournament_points', # Puntos acumulados en el torneo actual (antes de este partido)
 ]
 
 
@@ -140,6 +145,7 @@ _NUMERIC_COLS = [
     'home_tackles_won', 'away_tackles_won',
     'home_interceptions', 'away_interceptions',
     'home_blocked_shots', 'away_blocked_shots',
+    'home_xg', 'away_xg',
 ]
 
 
@@ -311,6 +317,7 @@ NEUTRAL = {
     'shots_on_target_avg': 4.5, 'possession_avg': 50.0, 'total_shots_avg': 12.0,
     'gk_saves_avg': 3.0, 'big_chances_avg': 2.5, 'accurate_passes_avg': 300.0,
     'tackles_won_avg': 8.0, 'interceptions_avg': 7.0, 'blocked_shots_avg': 2.0,
+    'xg_avg': 1.2,
 }
 
 
@@ -343,6 +350,7 @@ def _calc_team_form(history: list, window: int = FORM_WINDOW) -> dict:
         'tackles_won_avg':       weighted_mean('tackles_won', 8.0),
         'interceptions_avg':     weighted_mean('interceptions', 7.0),
         'blocked_shots_avg':     weighted_mean('blocked_shots', 2.0),
+        'xg_avg':                weighted_mean('xg', 1.2),
     }
 
 
@@ -352,6 +360,12 @@ def calculate_form_features(df: pd.DataFrame) -> pd.DataFrame:
 
     # Precompute the most recent season to determine source weights
     current_season = df['season'].max()
+
+    # Tournament points tracker: (team, season) -> cumulative points
+    tournament_points: dict = {}
+
+    home_tourn_pts_list: list = []
+    away_tourn_pts_list: list = []
 
     for _, row in df.iterrows():
         home, away = row['home_team'], row['away_team']
@@ -375,6 +389,10 @@ def calculate_form_features(df: pd.DataFrame) -> pd.DataFrame:
         home_forms.append(_calc_team_form(team_history[home]['home']))
         away_forms.append(_calc_team_form(team_history[away]['away']))
 
+        # Record tournament points BEFORE this match is processed
+        home_tourn_pts_list.append(tournament_points.get((home, season), 0))
+        away_tourn_pts_list.append(tournament_points.get((away, season), 0))
+
         for role, team, side_key, goals_for, goals_against, res_win in [
             ('home', home, 'home', 'home_goals', 'away_goals', '1'),
             ('away', away, 'away', 'away_goals', 'home_goals', '2'),
@@ -393,13 +411,29 @@ def calculate_form_features(df: pd.DataFrame) -> pd.DataFrame:
                 'tackles_won':     row.get(f'{role}_tackles_won', np.nan),
                 'interceptions':   row.get(f'{role}_interceptions', np.nan),
                 'blocked_shots':   row.get(f'{role}_blocked_shots', np.nan),
+                'xg':              row.get(f'{role}_xg', np.nan),
                 'src_w':           src_w,
             })
+
+        # Update tournament points AFTER appending to history (cumulative)
+        home_goals = int(row['home_goals']) if row['home_goals'] is not None else 0
+        away_goals = int(row['away_goals']) if row['away_goals'] is not None else 0
+        if home_goals > away_goals:
+            tournament_points[(home, season)] = tournament_points.get((home, season), 0) + 3
+        elif home_goals == away_goals:
+            tournament_points[(home, season)] = tournament_points.get((home, season), 0) + 1
+            tournament_points[(away, season)] = tournament_points.get((away, season), 0) + 1
+        else:
+            tournament_points[(away, season)] = tournament_points.get((away, season), 0) + 3
 
     df = df.copy()
     for prefix, forms in [('home', home_forms), ('away', away_forms)]:
         for key in forms[0]:
             df[f'{prefix}_{key}'] = [f[key] for f in forms]
+
+    # Add tournament points columns (accumulated before each match, chronologically)
+    df['home_tournament_points'] = home_tourn_pts_list
+    df['away_tournament_points'] = away_tourn_pts_list
 
     logger.info(f"Form features calculadas para {len(team_history)} equipos")
     return df

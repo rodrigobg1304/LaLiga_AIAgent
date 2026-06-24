@@ -96,7 +96,7 @@ ELO_SEASON_REGRESSION = 0.75
 
 FORM_WINDOW = 10            # Últimos N partidos para forma reciente
 H2H_LOOKBACK = 5            # Últimos N enfrentamientos H2H
-MIN_H2H_MATCHES = 2         # Mínimo de H2H antes de usar proxy
+MIN_H2H_MATCHES = 1         # Mínimo de H2H antes de usar proxy
 
 # ═══════════════════════════════════════════════════════════
 # MODELO - Configuración general
