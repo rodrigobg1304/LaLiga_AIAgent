@@ -73,6 +73,11 @@ HISTORICAL_WEIGHT = 0.35
 WIN_RATE_RECENT_WEIGHT = 0.35
 WIN_RATE_HISTORICAL_WEIGHT = 0.65
 
+# Current tournament form blending weights for international leagues
+# Credibility formula: w_current = n / (n + TOURN_CREDIBILITY_PSEUDO_COUNT)
+# 0 matches→0%, 1→25%, 2→40%, 3→50%, 5→62%
+TOURN_CREDIBILITY_PSEUDO_COUNT = 3
+
 # ═══════════════════════════════════════════════════════════
 # ELO RATING - Configuración
 # ═══════════════════════════════════════════════════════════

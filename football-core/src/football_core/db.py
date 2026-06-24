@@ -827,3 +827,120 @@ def get_upcoming_fixtures(league_id: str) -> list[dict]:
         ORDER BY MatchDateLocal ASC
     """
     return run_query(sql, (league_id,))
+
+
+def get_current_tournament_averages(team: str, league_id: str, year: str) -> dict:
+    """
+    Returns averaged stats for a team in a specific league/year (current tournament).
+
+    Queries all matches of `team` in `league_id` AND `year`, both as home and away.
+    For home appearances: goals_for = homeValue of 'Goals', stats from homeValue.
+    For away appearances: goals_for = awayValue of 'Goals', stats from awayValue.
+
+    Returns a dict with keys n_home, n_away, and per-role averaged stats.
+    Returns {} if team has no data for that league/year.
+    """
+    sql = f"""
+        SELECT
+            role,
+            COUNT(DISTINCT matchId) AS n_matches,
+            AVG(win)                AS win_rate,
+            AVG(goals_for)          AS goals_for_avg,
+            AVG(goals_against)      AS goals_against_avg,
+            AVG(points)             AS points_avg,
+            AVG(shots_on_target)    AS shots_on_target_avg,
+            AVG(possession)         AS possession_avg,
+            AVG(total_shots)        AS total_shots_avg,
+            AVG(gk_saves)           AS gk_saves_avg,
+            AVG(big_chances)        AS big_chances_avg,
+            AVG(accurate_passes)    AS accurate_passes_avg,
+            AVG(tackles_won)        AS tackles_won_avg,
+            AVG(interceptions)      AS interceptions_avg,
+            AVG(blocked_shots)      AS blocked_shots_avg
+        FROM (
+            SELECT
+                matchId,
+                'home' AS role,
+                CASE WHEN MAX(CASE WHEN name='Goals' THEN CAST(homeValue AS DECIMAL) END) >
+                          MAX(CASE WHEN name='Goals' THEN CAST(awayValue AS DECIMAL) END) THEN 1.0
+                     ELSE 0.0 END                                                              AS win,
+                MAX(CASE WHEN name='Goals'            THEN CAST(homeValue AS DECIMAL) END)    AS goals_for,
+                MAX(CASE WHEN name='Goals'            THEN CAST(awayValue AS DECIMAL) END)    AS goals_against,
+                CASE WHEN MAX(CASE WHEN name='Goals' THEN CAST(homeValue AS DECIMAL) END) >
+                          MAX(CASE WHEN name='Goals' THEN CAST(awayValue AS DECIMAL) END) THEN 3.0
+                     WHEN MAX(CASE WHEN name='Goals' THEN CAST(homeValue AS DECIMAL) END) =
+                          MAX(CASE WHEN name='Goals' THEN CAST(awayValue AS DECIMAL) END) THEN 1.0
+                     ELSE 0.0 END                                                              AS points,
+                MAX(CASE WHEN name='Shots on target'  THEN CAST(homeValue AS DECIMAL) END)    AS shots_on_target,
+                MAX(CASE WHEN name='Ball possession'  THEN CAST(homeValue AS DECIMAL) END)    AS possession,
+                MAX(CASE WHEN name='Total shots'      THEN CAST(homeValue AS DECIMAL) END)    AS total_shots,
+                MAX(CASE WHEN name='Goalkeeper saves' THEN CAST(homeValue AS DECIMAL) END)    AS gk_saves,
+                MAX(CASE WHEN name='Big chances'      THEN CAST(homeValue AS DECIMAL) END)    AS big_chances,
+                MAX(CASE WHEN name='Accurate passes'  THEN CAST(homeValue AS DECIMAL) END)    AS accurate_passes,
+                MAX(CASE WHEN name='Tackles won'      THEN CAST(homeValue AS DECIMAL) END)    AS tackles_won,
+                MAX(CASE WHEN name='Interceptions'    THEN CAST(homeValue AS DECIMAL) END)    AS interceptions,
+                MAX(CASE WHEN name='Blocked shots'    THEN CAST(homeValue AS DECIMAL) END)    AS blocked_shots
+            FROM {TABLE}
+            WHERE LeagueId = %s
+              AND Year = %s
+              AND homeTeam = %s
+            GROUP BY matchId
+
+            UNION ALL
+
+            SELECT
+                matchId,
+                'away' AS role,
+                CASE WHEN MAX(CASE WHEN name='Goals' THEN CAST(awayValue AS DECIMAL) END) >
+                          MAX(CASE WHEN name='Goals' THEN CAST(homeValue AS DECIMAL) END) THEN 1.0
+                     ELSE 0.0 END                                                              AS win,
+                MAX(CASE WHEN name='Goals'            THEN CAST(awayValue AS DECIMAL) END)    AS goals_for,
+                MAX(CASE WHEN name='Goals'            THEN CAST(homeValue AS DECIMAL) END)    AS goals_against,
+                CASE WHEN MAX(CASE WHEN name='Goals' THEN CAST(awayValue AS DECIMAL) END) >
+                          MAX(CASE WHEN name='Goals' THEN CAST(homeValue AS DECIMAL) END) THEN 3.0
+                     WHEN MAX(CASE WHEN name='Goals' THEN CAST(awayValue AS DECIMAL) END) =
+                          MAX(CASE WHEN name='Goals' THEN CAST(homeValue AS DECIMAL) END) THEN 1.0
+                     ELSE 0.0 END                                                              AS points,
+                MAX(CASE WHEN name='Shots on target'  THEN CAST(awayValue AS DECIMAL) END)    AS shots_on_target,
+                MAX(CASE WHEN name='Ball possession'  THEN CAST(awayValue AS DECIMAL) END)    AS possession,
+                MAX(CASE WHEN name='Total shots'      THEN CAST(awayValue AS DECIMAL) END)    AS total_shots,
+                MAX(CASE WHEN name='Goalkeeper saves' THEN CAST(awayValue AS DECIMAL) END)    AS gk_saves,
+                MAX(CASE WHEN name='Big chances'      THEN CAST(awayValue AS DECIMAL) END)    AS big_chances,
+                MAX(CASE WHEN name='Accurate passes'  THEN CAST(awayValue AS DECIMAL) END)    AS accurate_passes,
+                MAX(CASE WHEN name='Tackles won'      THEN CAST(awayValue AS DECIMAL) END)    AS tackles_won,
+                MAX(CASE WHEN name='Interceptions'    THEN CAST(awayValue AS DECIMAL) END)    AS interceptions,
+                MAX(CASE WHEN name='Blocked shots'    THEN CAST(awayValue AS DECIMAL) END)    AS blocked_shots
+            FROM {TABLE}
+            WHERE LeagueId = %s
+              AND Year = %s
+              AND awayTeam = %s
+            GROUP BY matchId
+        ) AS team_appearances
+        GROUP BY role
+    """
+    params = (league_id, year, team, league_id, year, team)
+    rows = run_query(sql, params)
+
+    if not rows:
+        return {}
+
+    result = {}
+    for row in rows:
+        role = row['role']
+        n = int(row['n_matches']) if row['n_matches'] is not None else 0
+        result[f'n_{role}'] = n
+        stat_keys = [
+            'win_rate', 'goals_for_avg', 'goals_against_avg', 'points_avg',
+            'shots_on_target_avg', 'possession_avg', 'total_shots_avg',
+            'gk_saves_avg', 'big_chances_avg', 'accurate_passes_avg',
+            'tackles_won_avg', 'interceptions_avg', 'blocked_shots_avg',
+        ]
+        for key in stat_keys:
+            val = row.get(key)
+            result[key] = float(val) if val is not None else None
+
+    # Ensure n_home and n_away always exist
+    result.setdefault('n_home', 0)
+    result.setdefault('n_away', 0)
+
+    return result

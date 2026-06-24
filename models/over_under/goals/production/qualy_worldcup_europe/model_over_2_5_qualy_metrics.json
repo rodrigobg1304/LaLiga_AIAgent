@@ -1,8 +1,8 @@
 {
-  "cv_accuracy_mean": 0.5888699020277968,
-  "cv_accuracy_std": 0.027736947692017233,
+  "cv_accuracy_mean": 0.5948849396217817,
+  "cv_accuracy_std": 0.018504963800031148,
   "cv_folds": 5,
-  "test_accuracy": 0.5125,
-  "test_auc": 0.5042019749282163,
-  "timestamp": "2026-06-24T09:18:44.192477"
+  "test_accuracy": 0.525,
+  "test_auc": 0.48287695216751875,
+  "timestamp": "2026-06-24T21:38:30.894460"
 }

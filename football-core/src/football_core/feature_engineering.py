@@ -26,6 +26,7 @@ from football_core.db import (
     get_team_win_rates,
     get_team_goals_conceded_average,
     get_team_matches_total_goals,
+    get_current_tournament_averages,
 )
 
 from football_core.constants import (
@@ -43,6 +44,7 @@ from football_core.constants import (
     MIN_H2H_MATCHES,
     INTERNATIONAL_LEAGUE_IDS,
     NEUTRAL_TEAM_STATS,
+    TOURN_CREDIBILITY_PSEUDO_COUNT,
 )
 
 
@@ -817,6 +819,67 @@ def build_features_1x2(home_team: str, away_team: str, year: Optional[str],
     return feature_vector
 
 
+def _blend_tournament_stats(features_40: np.ndarray, home_tourn: dict, away_tourn: dict) -> np.ndarray:
+    """Blend historical features with current tournament observed stats.
+
+    Uses a credibility-weighted blend: w = n / (n + TOURN_CREDIBILITY_PSEUDO_COUNT).
+    Only blends stats for teams that have current tournament data.
+    Recomputes derived balance features after blending.
+    """
+    f = features_40.copy().flatten()  # work on a flat copy
+
+    # Mapping: (role, stat_key) -> feature index
+    stat_index_map = {
+        ('home', 'win_rate'):            3,
+        ('home', 'goals_for_avg'):       4,
+        ('home', 'goals_against_avg'):   5,
+        ('home', 'points_avg'):          6,
+        ('home', 'shots_on_target_avg'): 7,
+        ('home', 'possession_avg'):      8,
+        ('home', 'total_shots_avg'):     9,
+        ('home', 'gk_saves_avg'):        10,
+        ('home', 'big_chances_avg'):     11,
+        ('home', 'accurate_passes_avg'): 12,
+        ('home', 'tackles_won_avg'):     13,
+        ('home', 'interceptions_avg'):   14,
+        ('home', 'blocked_shots_avg'):   15,
+        ('away', 'win_rate'):            16,
+        ('away', 'goals_for_avg'):       17,
+        ('away', 'goals_against_avg'):   18,
+        ('away', 'points_avg'):          19,
+        ('away', 'shots_on_target_avg'): 20,
+        ('away', 'possession_avg'):      21,
+        ('away', 'total_shots_avg'):     22,
+        ('away', 'gk_saves_avg'):        23,
+        ('away', 'big_chances_avg'):     24,
+        ('away', 'accurate_passes_avg'): 25,
+        ('away', 'tackles_won_avg'):     26,
+        ('away', 'interceptions_avg'):   27,
+        ('away', 'blocked_shots_avg'):   28,
+    }
+
+    for (role, stat), idx in stat_index_map.items():
+        tourn = home_tourn if role == 'home' else away_tourn
+        n = tourn.get(f'n_{role}', 0)
+        if n == 0:
+            continue
+        stat_val = tourn.get(stat)
+        if stat_val is None:
+            continue
+        # Credibility: w = n / (n + pseudo_count)
+        w = n / (n + TOURN_CREDIBILITY_PSEUDO_COUNT)
+        f[idx] = w * stat_val + (1 - w) * f[idx]
+
+    # Recompute derived balance features after blending
+    f[35] = abs(f[3]  - f[16])   # form_balance
+    f[36] = abs(f[4]  - f[17])   # goals_balance
+    f[37] = abs(f[8]  - f[21])   # possession_balance
+    f[38] = abs(f[9]  - f[22])   # shots_balance
+    f[39] = abs(f[7]  - f[20])   # shots_on_target_balance
+
+    return f.reshape(1, -1)
+
+
 def build_features_qualy(home_team: str, away_team: str, year: Optional[str],
                          league_id: str, is_qualifier: int) -> np.ndarray:
     """
@@ -827,11 +890,23 @@ def build_features_qualy(home_team: str, away_team: str, year: Optional[str],
     las temporadas correctas (ej: ["2026", "2022"]) al consultar la BD.
 
     Feature 41: is_qualifier (1 = partido de clasificatoria, 0 = torneo principal).
+
+    Blends current tournament observed stats (credibility-weighted) into the feature
+    vector so teams with real WC 2026 data are not treated identically to 4-year-old
+    historical averages.
     """
     # Construir las 40 features base con el año real (formato internacional "2026")
     # → ELO correcto (caché global incluye partidos internacionales)
     # → Stats de equipo desde BD filtradas por años del ciclo internacional
     # → H2H basado en enfrentamientos históricos entre las selecciones
     features_40 = build_features_1x2(home_team, away_team, year=year, league_id=league_id)
+
+    # Blend current tournament form for international leagues
+    if year:
+        home_tourn = get_current_tournament_averages(home_team, league_id, year)
+        away_tourn = get_current_tournament_averages(away_team, league_id, year)
+        if home_tourn or away_tourn:
+            features_40 = _blend_tournament_stats(features_40, home_tourn, away_tourn)
+
     is_q = np.array([[float(is_qualifier)]], dtype=np.float64)
     return np.hstack([features_40, is_q])

@@ -101,6 +101,11 @@ RF_PARAMS = dict(
 # Calibración con cv=3 por dataset pequeño (en lugar de cv=5)
 CALIBRATION_CV = 3
 
+# Source-based match weights for form calculation
+WEIGHT_CURRENT_WC   = 3.0   # Matches in the same WC tournament being predicted
+WEIGHT_QUALIFIER    = 1.0   # WC qualifier matches
+WEIGHT_PREV_WC      = 0.5   # Previous WC editions
+
 # 41 features base (40 estándar + is_qualifier)
 FEATURE_COLUMNS = [
     'elo_home', 'elo_away', 'elo_diff',
@@ -301,40 +306,43 @@ def _safe_mean(values, default=np.nan):
     return np.mean(filtered) if filtered else default
 
 
+NEUTRAL = {
+    'win_rate': 0.33, 'goals_for_avg': 1.5, 'goals_against_avg': 1.5, 'points_avg': 1.0,
+    'shots_on_target_avg': 4.5, 'possession_avg': 50.0, 'total_shots_avg': 12.0,
+    'gk_saves_avg': 3.0, 'big_chances_avg': 2.5, 'accurate_passes_avg': 300.0,
+    'tackles_won_avg': 8.0, 'interceptions_avg': 7.0, 'blocked_shots_avg': 2.0,
+}
+
+
 def _calc_team_form(history: list, window: int = FORM_WINDOW) -> dict:
-    NEUTRAL = {
-        'win_rate': 0.33, 'goals_for_avg': 1.5, 'goals_against_avg': 1.5, 'points_avg': 1.0,
-        'shots_on_target_avg': 4.5, 'possession_avg': 50.0, 'total_shots_avg': 12.0,
-        'gk_saves_avg': 3.0, 'big_chances_avg': 2.5, 'accurate_passes_avg': 300.0,
-        'tackles_won_avg': 8.0, 'interceptions_avg': 7.0, 'blocked_shots_avg': 2.0,
-    }
     if not history:
         return NEUTRAL
 
-    w = 1.0 if len(history) < 5 else RECENT_WEIGHT
     recent = history[-window:] if len(history) >= window else history
 
-    def weighted(key, default):
-        r = _safe_mean([m[key] for m in recent], default)
-        if len(history) > window:
-            t = _safe_mean([m[key] for m in history], default)
-            return r * w + t * (1 - w)
-        return r
+    def weighted_mean(key, default):
+        pairs = [(m[key], m.get('src_w', 1.0))
+                 for m in recent
+                 if m.get(key) is not None and not (isinstance(m[key], float) and np.isnan(m[key]))]
+        if not pairs:
+            return default
+        total_w = sum(w for _, w in pairs)
+        return sum(v * w for v, w in pairs) / total_w
 
     return {
-        'win_rate':              weighted('win', 0.33),
-        'goals_for_avg':         weighted('goals_for', 1.5),
-        'goals_against_avg':     weighted('goals_against', 1.5),
-        'points_avg':            weighted('points', 1.0),
-        'shots_on_target_avg':   weighted('shots_on_target', 4.5),
-        'possession_avg':        weighted('possession', 50.0),
-        'total_shots_avg':       weighted('total_shots', 12.0),
-        'gk_saves_avg':          weighted('gk_saves', 3.0),
-        'big_chances_avg':       weighted('big_chances', 2.5),
-        'accurate_passes_avg':   weighted('accurate_passes', 300.0),
-        'tackles_won_avg':       weighted('tackles_won', 8.0),
-        'interceptions_avg':     weighted('interceptions', 7.0),
-        'blocked_shots_avg':     weighted('blocked_shots', 2.0),
+        'win_rate':              weighted_mean('win', 0.33),
+        'goals_for_avg':         weighted_mean('goals_for', 1.5),
+        'goals_against_avg':     weighted_mean('goals_against', 1.5),
+        'points_avg':            weighted_mean('points', 1.0),
+        'shots_on_target_avg':   weighted_mean('shots_on_target', 4.5),
+        'possession_avg':        weighted_mean('possession', 50.0),
+        'total_shots_avg':       weighted_mean('total_shots', 12.0),
+        'gk_saves_avg':          weighted_mean('gk_saves', 3.0),
+        'big_chances_avg':       weighted_mean('big_chances', 2.5),
+        'accurate_passes_avg':   weighted_mean('accurate_passes', 300.0),
+        'tackles_won_avg':       weighted_mean('tackles_won', 8.0),
+        'interceptions_avg':     weighted_mean('interceptions', 7.0),
+        'blocked_shots_avg':     weighted_mean('blocked_shots', 2.0),
     }
 
 
@@ -342,9 +350,24 @@ def calculate_form_features(df: pd.DataFrame) -> pd.DataFrame:
     team_history: dict = {}
     home_forms, away_forms = [], []
 
+    # Precompute the most recent season to determine source weights
+    current_season = df['season'].max()
+
     for _, row in df.iterrows():
         home, away = row['home_team'], row['away_team']
         result = row['result']
+        season = row['season']
+        is_wc = (int(row.get('is_qualifier', 1)) == 0)
+        is_current = (season == current_season and is_wc)
+        is_prev_wc = (season != current_season and is_wc)
+
+        if is_current:
+            src_w = WEIGHT_CURRENT_WC
+        elif is_prev_wc:
+            src_w = WEIGHT_PREV_WC
+        else:
+            src_w = WEIGHT_QUALIFIER
+
         for t in (home, away):
             if t not in team_history:
                 team_history[t] = {'home': [], 'away': []}
@@ -370,6 +393,7 @@ def calculate_form_features(df: pd.DataFrame) -> pd.DataFrame:
                 'tackles_won':     row.get(f'{role}_tackles_won', np.nan),
                 'interceptions':   row.get(f'{role}_interceptions', np.nan),
                 'blocked_shots':   row.get(f'{role}_blocked_shots', np.nan),
+                'src_w':           src_w,
             })
 
     df = df.copy()
