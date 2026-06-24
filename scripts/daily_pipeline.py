@@ -139,15 +139,45 @@ def _actual_outcome(home_score: int, away_score: int) -> str:
     return "X"
 
 
+def _goals_ou_check(ou_goals: dict, actual_total: int) -> tuple[str, bool]:
+    """
+    Returns (label, was_correct) for the most likely O/U goals threshold.
+    Compares predicted threshold vs actual total goals.
+    """
+    if not ou_goals:
+        return "—", False
+    sorted_keys = sorted(ou_goals.keys(), key=_key_to_float)
+
+    def over_pct(k):
+        v = ou_goals[k]
+        return v.get("over", 0) if isinstance(v, dict) else v * 100
+
+    best_key = None
+    for k in sorted_keys:
+        if over_pct(k) >= 50:
+            best_key = k
+
+    if best_key:
+        t = _key_to_float(best_key)
+        pct = over_pct(best_key)
+        correct = actual_total > t
+        return f"+{t:.1f} ({pct:.0f}%)", correct
+    else:
+        k = sorted_keys[0]
+        t = _key_to_float(k)
+        pct = over_pct(k)
+        correct = actual_total <= t
+        return f"-{t:.1f} ({100-pct:.0f}%)", correct
+
+
 def build_yesterday_block(results: list[dict], year_cache: dict) -> str:
     if not results:
         return ""
 
     lines = ["📊 <b>Resultados de ayer</b>", "━━━━━━━━━━━━━━━━━━━━━━"]
 
-    correct = 0
-    total_pred_goals = 0.0
-    total_real_goals = 0
+    winner_correct = 0
+    goals_correct  = 0
 
     for m in results:
         lid  = str(m["LeagueId"])
@@ -155,40 +185,62 @@ def build_yesterday_block(results: list[dict], year_cache: dict) -> str:
         home = _fmt_team(m["homeTeam"])
         away = _fmt_team(m["awayTeam"])
         hs, as_ = int(m["homeScore"]), int(m["awayScore"])
-        actual = _actual_outcome(hs, as_)
-        total_real_goals += hs + as_
+        actual_outcome = _actual_outcome(hs, as_)
+        actual_total   = hs + as_
 
         pred = get_prediction(m["homeTeam"], m["awayTeam"], lid, year)
 
+        # ── Header ──────────────────────────────────────────────
+        lines.append(f"⚽ <b>{home} {hs}-{as_} {away}</b>")
+
         if pred:
             resultado = pred.get("resultado", {})
-            probs = resultado.get("probabilities", {})
+            probs     = resultado.get("probabilities", {})
             predicted = resultado.get("predicted", "?")
             best_prob = probs.get(predicted, 0)
-            hit = "✅" if predicted == actual else "❌"
-            if predicted == actual:
-                correct += 1
+            pred_label = OUTCOME_LABELS.get(predicted, predicted)
+            actual_label = OUTCOME_LABELS.get(actual_outcome, actual_outcome)
 
-            pred_emoji = OUTCOME_EMOJI.get(predicted, "")
+            # ── Winner line ──────────────────────────────────────
+            winner_hit = predicted == actual_outcome
+            winner_icon = "✅" if winner_hit else "❌"
+            if winner_hit:
+                winner_correct += 1
+                lines.append(
+                    f"  {winner_icon} Ganador: {OUTCOME_EMOJI.get(predicted,'')} "
+                    f"<b>{pred_label}</b> ({best_prob:.0f}%)"
+                )
+            else:
+                lines.append(
+                    f"  {winner_icon} Ganador: pred {OUTCOME_EMOJI.get(predicted,'')} "
+                    f"{pred_label} ({best_prob:.0f}%) → fue {OUTCOME_EMOJI.get(actual_outcome,'')} "
+                    f"<b>{actual_label}</b>"
+                )
+
+            # ── Goals line ───────────────────────────────────────
             ou = pred.get("over_under_goals", {})
-            eg_h, eg_a = _expected_goals_split(ou, probs.get("1", 0), probs.get("X", 0), probs.get("2", 0))
-            total_pred_goals += eg_h + eg_a
-
+            p1, px, p2 = probs.get("1", 0), probs.get("X", 0), probs.get("2", 0)
+            eg_h, eg_a = _expected_goals_split(ou, p1, px, p2)
+            pred_total = eg_h + eg_a
+            ou_label, goals_hit = _goals_ou_check(ou, actual_total)
+            goals_icon = "✅" if goals_hit else "❌"
+            if goals_hit:
+                goals_correct += 1
             lines.append(
-                f"{hit} {home} <b>{hs}-{as_}</b> {away}  "
-                f"({pred_emoji}{OUTCOME_LABELS.get(predicted, predicted)} {best_prob:.0f}%  "
-                f"⚽~{eg_h+eg_a:.1f})"
+                f"  {goals_icon} Goles: pred ~{pred_total:.1f} (O/U {ou_label}) · "
+                f"real <b>{actual_total}</b>"
             )
         else:
-            actual_emoji = OUTCOME_EMOJI.get(actual, "")
-            lines.append(f"⬜ {home} <b>{hs}-{as_}</b> {away}  ({actual_emoji})")
+            actual_label = OUTCOME_LABELS.get(actual_outcome, actual_outcome)
+            lines.append(f"  ⬜ Sin predicción · {OUTCOME_EMOJI.get(actual_outcome,'')} {actual_label}")
 
-    n_pred = sum(1 for m in results if get_prediction is not None)
-    pct = f"{correct}/{len(results)}" if results else "0/0"
-    avg_goals = f"{total_pred_goals/len(results):.1f}" if results else "—"
-    lines.append(f"<i>Aciertos: {pct} · Goles pred ~{avg_goals} vs real {total_real_goals/len(results):.1f}</i>")
+        lines.append("")
 
-    return "\n".join(lines)
+    n = len(results)
+    lines.append(
+        f"<i>Ganador: {winner_correct}/{n} ✅  ·  Goles O/U: {goals_correct}/{n} ✅</i>"
+    )
+    return "\n".join(lines).rstrip()
 
 
 # ─────────────────────────────────────────────
