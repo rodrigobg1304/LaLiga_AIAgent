@@ -544,7 +544,16 @@ def format_match_block(match: dict, pred: dict | None,
     px = probs.get("X", 0)
     p2 = probs.get("2", 0)
 
-    best = max(probs, key=lambda k: probs.get(k, 0)) if probs else "?"
+    # Calibrated outcome: argmax almost never selects X because px < p1 or p2.
+    # WC 2026 draw rate is ~30%; predict X if px > 22% AND px > 0.80*max(p1,p2).
+    if probs:
+        raw_best = max(probs, key=lambda k: probs.get(k, 0))
+        if raw_best != "X" and px > 20 and px > 0.65 * max(p1, p2):
+            best = "X"
+        else:
+            best = raw_best
+    else:
+        best = "?"
     best_label = OUTCOME_LABELS.get(best, best)
     best_emoji = OUTCOME_EMOJI.get(best, "")
 
