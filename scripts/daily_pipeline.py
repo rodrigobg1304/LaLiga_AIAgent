@@ -408,27 +408,55 @@ def scoreline_probs(ou_goals: dict, p1: float, px: float, p2: float,
     return sorted(normalized.items(), key=lambda x: x[1], reverse=True)
 
 
+def _min_goals_from_ou(ou_goals: dict) -> int:
+    """
+    Returns the minimum total goals the scoreline must have, derived from the
+    highest O/U threshold where over-probability >= 50%.
+
+    E.g. if P(>1.5) = 68% and P(>2.5) = 42%  → min_goals = 2
+         if P(>2.5) = 55% and P(>3.5) = 28%  → min_goals = 3
+         if P(>0.5) = 91% and P(>1.5) = 45%  → min_goals = 1
+    """
+    best_threshold = -1.0
+    for key, val in ou_goals.items():
+        over_pct = val.get("over", 0) if isinstance(val, dict) else val * 100
+        if over_pct >= 50:
+            t = _key_to_float(key)
+            if t > best_threshold:
+                best_threshold = t
+    return int(best_threshold) + 1 if best_threshold >= 0 else 0
+
+
 def _best_scoreline(ou_goals: dict, p1: float, px: float, p2: float,
                     predicted_outcome: str = None) -> str:
     """
-    Returns the most likely scoreline consistent with the predicted 1X2 outcome.
-    - predicted_outcome='1': filters to home wins (h > a)
-    - predicted_outcome='2': filters to away wins (h < a)
-    - predicted_outcome='X': filters to draws (h == a)
-    Falls back to overall most likely if no match found.
+    Returns the most likely scoreline that is consistent with BOTH:
+    1. The predicted 1X2 outcome (1=home win, X=draw, 2=away win)
+    2. The O/U goals model — scoreline total ≥ min_goals derived from P(>T) ≥ 50%
+
+    Fallback: relax the goals constraint if no scoreline satisfies both filters.
     """
     scores = scoreline_probs(ou_goals, p1, px, p2)
     if not scores:
         return "—"
 
-    if predicted_outcome == "1":
-        filtered = [(s, p) for s, p in scores if s[0] > s[1]]
-    elif predicted_outcome == "2":
-        filtered = [(s, p) for s, p in scores if s[0] < s[1]]
-    elif predicted_outcome == "X":
-        filtered = [(s, p) for s, p in scores if s[0] == s[1]]
-    else:
-        filtered = scores
+    min_g = _min_goals_from_ou(ou_goals)
+
+    def outcome_ok(h, a):
+        if predicted_outcome == "1":
+            return h > a
+        if predicted_outcome == "2":
+            return h < a
+        if predicted_outcome == "X":
+            return h == a
+        return True
+
+    # Primary filter: match outcome AND goals minimum
+    filtered = [(s, p) for s, p in scores if outcome_ok(s[0], s[1]) and s[0] + s[1] >= min_g]
+
+    # Fallback 1: only outcome filter (drop goals constraint)
+    if not filtered:
+        filtered = [(s, p) for s, p in scores if outcome_ok(s[0], s[1])]
 
     (h, a), _ = (filtered[0] if filtered else scores[0])
     return f"{h}-{a}"
