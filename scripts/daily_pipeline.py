@@ -563,8 +563,16 @@ def format_match_block(match: dict, pred: dict | None,
 
     # ── Goals ─────────────────────────────────────────────────────
     eg_h, eg_a = _expected_goals_split(ou_goals, p1, px, p2)
+
+    def _ou_pct(key: str) -> str:
+        v = ou_goals.get(key)
+        if v is None:
+            return "—"
+        pct = v.get("over", 0) if isinstance(v, dict) else v * 100
+        return f"{pct:.0f}%"
+
     block_goals = (
-        f"⚽ <b>Goles:</b> {_top2_ou(ou_goals, 1)}\n"
+        f"⚽ <b>Goles:</b> +1.5 ({_ou_pct('over_1_5')}) · +2.5 ({_ou_pct('over_2_5')})\n"
         f"{I}🏠~{eg_h} · ✈️~{eg_a}"
     )
 
