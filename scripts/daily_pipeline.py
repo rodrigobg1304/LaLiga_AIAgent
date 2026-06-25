@@ -18,6 +18,7 @@ Required env vars (in scripts/.env or shell):
 import os
 import re
 import sys
+import math
 import requests
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -344,6 +345,78 @@ def get_prediction(home_team: str, away_team: str, league_id: str, year: str | N
 
 
 # ─────────────────────────────────────────────
+# Scoreline prediction (Poisson + Dixon-Coles)
+# ─────────────────────────────────────────────
+
+def _poisson(k: int, lam: float) -> float:
+    if lam <= 0:
+        return 1.0 if k == 0 else 0.0
+    return math.exp(-lam) * (lam ** k) / math.factorial(k)
+
+
+def _dixon_coles_tau(h: int, a: int, lam_h: float, lam_a: float, rho: float = -0.10) -> float:
+    """
+    Correction factor for low-scoring scorelines.
+    ρ < 0 boosts 0-0 and 1-1 (more frequent than independent Poisson predicts)
+    and slightly reduces 1-0 and 0-1.
+    """
+    if h == 0 and a == 0:
+        return 1 - lam_h * lam_a * rho
+    if h == 1 and a == 0:
+        return 1 + lam_a * rho
+    if h == 0 and a == 1:
+        return 1 + lam_h * rho
+    if h == 1 and a == 1:
+        return 1 - rho
+    return 1.0
+
+
+def scoreline_probs(ou_goals: dict, p1: float, px: float, p2: float,
+                    max_goals: int = 5, rho: float = -0.10) -> list[tuple[int, int, float]]:
+    """
+    Returns top scorelines sorted by probability (descending).
+
+    λ_total is estimated from the sum of O/U survival probabilities:
+        E[total] = P(>0.5) + P(>1.5) + P(>2.5) + P(>3.5)
+    Then split into home/away using 1X2 weights.
+    Dixon-Coles correction applied for h,a ∈ {0,1}.
+    """
+    if not ou_goals:
+        return []
+
+    e_total = sum(
+        (v.get("over", 0) / 100 if isinstance(v, dict) else float(v))
+        for v in ou_goals.values()
+    )
+    if e_total <= 0:
+        return []
+
+    denom = p1 + px + p2 or 100.0
+    home_share = (p1 + 0.45 * px) / denom
+    lam_h = max(e_total * home_share,       0.05)
+    lam_a = max(e_total * (1 - home_share), 0.05)
+
+    raw: dict[tuple[int, int], float] = {}
+    for h in range(max_goals + 1):
+        for a in range(max_goals + 1):
+            p = _poisson(h, lam_h) * _poisson(a, lam_a)
+            p *= _dixon_coles_tau(h, a, lam_h, lam_a, rho)
+            raw[(h, a)] = p
+
+    total = sum(raw.values())
+    normalized = {k: v / total for k, v in raw.items()}
+    return sorted(normalized.items(), key=lambda x: x[1], reverse=True)
+
+
+def _fmt_scoreline_line(ou_goals: dict, p1: float, px: float, p2: float, top_n: int = 5) -> str:
+    scores = scoreline_probs(ou_goals, p1, px, p2)
+    if not scores:
+        return ""
+    parts = [f"{h}-{a} <b>{pct*100:.0f}%</b>" for (h, a), pct in scores[:top_n]]
+    return "🎲 <b>Marcadores:</b> " + " · ".join(parts)
+
+
+# ─────────────────────────────────────────────
 # Formatting helpers
 # ─────────────────────────────────────────────
 
@@ -461,11 +534,16 @@ def format_match_block(match: dict, pred: dict | None,
 
     ou_goals = pred.get("over_under_goals", {})
     eg_h, eg_a = _expected_goals_split(ou_goals, p1, px, p2)
-    line_goals = f"⚽ <b>Goles:</b> {_top2_ou(ou_goals, 1)}  |  🏠~{eg_h} · ✈️~{eg_a}"
+    line_goals     = f"⚽ <b>Goles:</b> {_top2_ou(ou_goals, 1)}  |  🏠~{eg_h} · ✈️~{eg_a}"
+    line_scoreline = _fmt_scoreline_line(ou_goals, p1, px, p2)
 
     saves_line, corners_line = _saves_corners_lines(pred, home_stats or {}, away_stats or {})
 
-    return "\n".join([header, line_1x2, line_best, line_goals, saves_line, corners_line])
+    lines = [header, line_1x2, line_best, line_goals]
+    if line_scoreline:
+        lines.append(line_scoreline)
+    lines += [saves_line, corners_line]
+    return "\n".join(lines)
 
 
 # ─────────────────────────────────────────────
