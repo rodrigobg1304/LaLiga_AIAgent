@@ -408,12 +408,29 @@ def scoreline_probs(ou_goals: dict, p1: float, px: float, p2: float,
     return sorted(normalized.items(), key=lambda x: x[1], reverse=True)
 
 
-def _best_scoreline(ou_goals: dict, p1: float, px: float, p2: float) -> str:
-    """Returns the single most likely scoreline as 'H-A'."""
+def _best_scoreline(ou_goals: dict, p1: float, px: float, p2: float,
+                    predicted_outcome: str = None) -> str:
+    """
+    Returns the most likely scoreline consistent with the predicted 1X2 outcome.
+    - predicted_outcome='1': filters to home wins (h > a)
+    - predicted_outcome='2': filters to away wins (h < a)
+    - predicted_outcome='X': filters to draws (h == a)
+    Falls back to overall most likely if no match found.
+    """
     scores = scoreline_probs(ou_goals, p1, px, p2)
     if not scores:
         return "—"
-    (h, a), _ = scores[0]
+
+    if predicted_outcome == "1":
+        filtered = [(s, p) for s, p in scores if s[0] > s[1]]
+    elif predicted_outcome == "2":
+        filtered = [(s, p) for s, p in scores if s[0] < s[1]]
+    elif predicted_outcome == "X":
+        filtered = [(s, p) for s, p in scores if s[0] == s[1]]
+    else:
+        filtered = scores
+
+    (h, a), _ = (filtered[0] if filtered else scores[0])
     return f"{h}-{a}"
 
 
@@ -511,9 +528,9 @@ def format_match_block(match: dict, pred: dict | None,
         f"✈️ {p2:.0f}% ({odds.get('2',0)})"
     )
 
-    # ── Scoreline ─────────────────────────────────────────────────
+    # ── Scoreline — consistent with predicted 1X2 outcome ────────
     ou_goals = pred.get("over_under_goals", {})
-    scoreline = _best_scoreline(ou_goals, p1, px, p2)
+    scoreline = _best_scoreline(ou_goals, p1, px, p2, predicted_outcome=best)
     block_score = f"🎲 <b>Resultado:</b> {scoreline}"
 
     # ── Goals ─────────────────────────────────────────────────────
