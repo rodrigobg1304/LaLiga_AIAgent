@@ -408,12 +408,13 @@ def scoreline_probs(ou_goals: dict, p1: float, px: float, p2: float,
     return sorted(normalized.items(), key=lambda x: x[1], reverse=True)
 
 
-def _fmt_scoreline_line(ou_goals: dict, p1: float, px: float, p2: float, top_n: int = 5) -> str:
+def _best_scoreline(ou_goals: dict, p1: float, px: float, p2: float) -> str:
+    """Returns the single most likely scoreline as 'H-A'."""
     scores = scoreline_probs(ou_goals, p1, px, p2)
     if not scores:
-        return ""
-    parts = [f"{h}-{a} <b>{pct*100:.0f}%</b>" for (h, a), pct in scores[:top_n]]
-    return "🎲 <b>Marcadores:</b> " + " · ".join(parts)
+        return "—"
+    (h, a), _ = scores[0]
+    return f"{h}-{a}"
 
 
 # ─────────────────────────────────────────────
@@ -471,37 +472,14 @@ def _expected_goals_split(ou_goals: dict, p1: float, px: float, p2: float) -> tu
     return round(total * home_share, 1), round(total * (1 - home_share), 1)
 
 
-def _saves_corners_lines(pred: dict, home_stats: dict, away_stats: dict) -> tuple[str, str]:
-    def _fmt(val, label):
-        return f"{val:.1f} {label}/p" if val is not None else "—"
-
-    h_saves   = home_stats.get("saves_avg")
-    a_saves   = away_stats.get("saves_avg")
-    h_corners = home_stats.get("corners_avg")
-    a_corners = away_stats.get("corners_avg")
-    n = max(home_stats.get("n_matches", 0), away_stats.get("n_matches", 0))
-
-    if h_saves is not None or a_saves is not None:
-        tag = f"({n}p)"
-        return (
-            f"🧤 <b>Paradas</b> {tag}:  🏠 {_fmt(h_saves,'par')}  ·  ✈️ {_fmt(a_saves,'par')}",
-            f"📐 <b>Córners</b> {tag}:  🏠 {_fmt(h_corners,'cor')}  ·  ✈️ {_fmt(a_corners,'cor')}",
-        )
-
-    saves   = pred.get("saves", {})
-    corners = pred.get("corners", {})
-    return (
-        f"🧤 <b>Paradas:</b>  🏠 {_top2_ou(saves.get('home',{}), 100)}  ·  ✈️ {_top2_ou(saves.get('away',{}), 100)}",
-        f"📐 <b>Córners:</b>  🏠 {_top2_ou(corners.get('home',{}), 100)}  ·  ✈️ {_top2_ou(corners.get('away',{}), 100)}",
-    )
-
-
 # ─────────────────────────────────────────────
 # Match block
 # ─────────────────────────────────────────────
 
 def format_match_block(match: dict, pred: dict | None,
                        home_stats: dict = None, away_stats: dict = None) -> str:
+    I = "       "   # indent — aligns stats under the emoji label
+
     kick_off = match["MatchDateLocal"]
     time_str = kick_off.strftime("%H:%M") if isinstance(kick_off, datetime) else str(kick_off)
     home = _fmt_team(match["homeTeam"])
@@ -522,28 +500,56 @@ def format_match_block(match: dict, pred: dict | None,
     p2 = probs.get("2", 0)
 
     best = max(probs, key=lambda k: probs.get(k, 0)) if probs else "?"
-    line_1x2 = (
-        f"🏆 <b>1X2</b>  🏠 {p1:.0f}% ({odds.get('1',0)}) · "
+    best_label = OUTCOME_LABELS.get(best, best)
+    best_emoji = OUTCOME_EMOJI.get(best, "")
+
+    # ── 1X2 ──────────────────────────────────────────────────────
+    block_1x2 = (
+        f"🏆 <b>1X2:</b> {best_emoji} {best_label} — {conf_label}\n"
+        f"{I}🏠 {p1:.0f}% ({odds.get('1',0)}) · "
         f"🤝 {px:.0f}% ({odds.get('X',0)}) · "
         f"✈️ {p2:.0f}% ({odds.get('2',0)})"
     )
-    line_best = (
-        f"🎯 Pronóstico: {OUTCOME_EMOJI.get(best,'')} "
-        f"<b>{OUTCOME_LABELS.get(best, best)}</b> — {conf_label}"
+
+    # ── Scoreline ─────────────────────────────────────────────────
+    ou_goals = pred.get("over_under_goals", {})
+    scoreline = _best_scoreline(ou_goals, p1, px, p2)
+    block_score = f"🎲 <b>Resultado:</b> {scoreline}"
+
+    # ── Goals ─────────────────────────────────────────────────────
+    eg_h, eg_a = _expected_goals_split(ou_goals, p1, px, p2)
+    block_goals = (
+        f"⚽ <b>Goles:</b> {_top2_ou(ou_goals, 1)}\n"
+        f"{I}🏠~{eg_h} · ✈️~{eg_a}"
     )
 
-    ou_goals = pred.get("over_under_goals", {})
-    eg_h, eg_a = _expected_goals_split(ou_goals, p1, px, p2)
-    line_goals     = f"⚽ <b>Goles:</b> {_top2_ou(ou_goals, 1)}  |  🏠~{eg_h} · ✈️~{eg_a}"
-    line_scoreline = _fmt_scoreline_line(ou_goals, p1, px, p2)
+    # ── Saves & Corners ───────────────────────────────────────────
+    def _fmt(val, label):
+        return f"{val:.1f} {label}/p" if val is not None else "—"
 
-    saves_line, corners_line = _saves_corners_lines(pred, home_stats or {}, away_stats or {})
+    h_stats = home_stats or {}
+    a_stats = away_stats or {}
+    h_saves   = h_stats.get("saves_avg")
+    a_saves   = a_stats.get("saves_avg")
+    h_corners = h_stats.get("corners_avg")
+    a_corners = a_stats.get("corners_avg")
+    n = max(h_stats.get("n_matches", 0), a_stats.get("n_matches", 0))
 
-    lines = [header, line_1x2, line_best, line_goals]
-    if line_scoreline:
-        lines.append(line_scoreline)
-    lines += [saves_line, corners_line]
-    return "\n".join(lines)
+    if h_saves is not None or a_saves is not None:
+        tag = f"({n}p)"
+        block_saves   = f"🧤 <b>Paradas</b> {tag}:\n{I}🏠 {_fmt(h_saves,'par')}  ·  ✈️ {_fmt(a_saves,'par')}"
+        block_corners = f"📐 <b>Córners</b> {tag}:\n{I}🏠 {_fmt(h_corners,'cor')}  ·  ✈️ {_fmt(a_corners,'cor')}"
+    else:
+        saves   = pred.get("saves", {})
+        corners = pred.get("corners", {})
+        sh = _top2_ou(saves.get("home",   {}), 100)
+        sa = _top2_ou(saves.get("away",   {}), 100)
+        ch = _top2_ou(corners.get("home", {}), 100)
+        ca = _top2_ou(corners.get("away", {}), 100)
+        block_saves   = f"🧤 <b>Paradas:</b>\n{I}🏠 {sh}  ·  ✈️ {sa}"
+        block_corners = f"📐 <b>Córners:</b>\n{I}🏠 {ch}  ·  ✈️ {ca}"
+
+    return "\n\n".join([header, block_1x2, block_score, block_goals, block_saves, block_corners])
 
 
 # ─────────────────────────────────────────────
