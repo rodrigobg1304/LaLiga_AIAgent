@@ -138,10 +138,40 @@ All services share: football-core (pip package)
 3. Agent service uses CrewAI tools to query DB or call prediction service, then generates natural language responses via Claude
 4. Streamlit calls prediction/agent APIs via HTTP and renders results
 
+## Daily Automation (WC 2026 / active tournaments)
+
+Two launchd agents run daily (replacing cron — launchd catches up if Mac was asleep):
+
+| Time | Agent plist | Script | Log |
+|------|-------------|--------|-----|
+| 09:00 | `com.laliga.collect-retrain` | `scripts/collect_and_retrain.py` | `scripts/logs/nightly.log` |
+| 10:00 | `com.laliga.daily-pipeline` | `scripts/daily_pipeline.py` | `scripts/logs/daily_pipeline.log` |
+
+**`collect_and_retrain.py` (9:00):** Collects Sofascore stats for completed WC 2026 rounds that have scores in Matches but no stats in Leagues. Retrains qualy models only if new rows were added. Safe to re-run (INSERT IGNORE). WC season id = 58210, league id = 16.
+
+**`daily_pipeline.py` (10:00):**
+1. Refreshes fixtures with placeholder team names (e.g. `w73`, `2a`) from Sofascore.
+2. Fetches last 36h results from DB, calls prediction API for each, shows ✅/❌ vs actual outcome.
+3. Fetches next 24h matches, calls prediction API, builds Telegram message and sends it.
+
+**Telegram:** `scripts/telegram_notifier.py`. Reads `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` from env or `scripts/.env`. HTML parse mode. Sends one message per run.
+
+**Scoreline prediction:** Poisson + Dixon-Coles (ρ=−0.10). λ estimated from O/U survival sum; split home/away by 1X2 weights. Best scoreline must be consistent with predicted 1X2 outcome and O/U goals minimum.
+
+**Draw calibration in pipeline:** raw argmax rarely selects X. Override: if `px > 20%` AND `px > 0.65 × max(p1, p2)` → predict draw.
+
+**Manage launchd agents:**
+```bash
+launchctl start com.laliga.collect-retrain   # force run now
+launchctl start com.laliga.daily-pipeline    # force run now
+launchctl list | grep laliga                 # check status
+```
+Plist files: `~/Library/LaunchAgents/com.laliga.collect-retrain.plist` and `com.laliga.daily-pipeline.plist`.
+
 ## Code Conventions
 
 - **Function names and variable names in English**, even if comments or docstrings are in Spanish (PEP8 style).
-- The MySQL database is updated manually on a weekly basis. Goal: replace this with a scheduled script that runs without restarting Docker containers.
+- DB updates for WC 2026 are automated daily via `collect_and_retrain.py`. Domestic leagues still updated manually.
 
 ## Critical Rules
 

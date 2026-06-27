@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.laliga.collect-retrain</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/rodrigobenitogarcia/anaconda3/envs/football-agent/bin/python3</string>
+        <string>/Users/rodrigobenitogarcia/PycharmProjects/LaLiga_AIAgent/scripts/collect_and_retrain.py</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>DB_HOST</key><string>localhost</string>
+        <key>DB_PORT</key><string>3306</string>
+        <key>DB_USER</key><string>root</string>
+        <key>DB_PASSWORD</key><string>Salamanca1304!</string>
+        <key>DB_DATABASE</key><string>RegularLeagues</string>
+        <key>DB_TABLE</key><string>Leagues</string>
+    </dict>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/rodrigobenitogarcia/PycharmProjects/LaLiga_AIAgent/scripts</string>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key><integer>9</integer>
+        <key>Minute</key><integer>0</integer>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/Users/rodrigobenitogarcia/PycharmProjects/LaLiga_AIAgent/scripts/logs/nightly.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/rodrigobenitogarcia/PycharmProjects/LaLiga_AIAgent/scripts/logs/nightly.log</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>
