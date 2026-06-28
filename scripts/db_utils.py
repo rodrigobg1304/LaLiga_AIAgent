@@ -150,6 +150,8 @@ def insert_match_metadata(matches: list[dict]) -> int:
         f"INSERT INTO {MATCHES_TABLE} ({columns}) VALUES {', '.join(value_rows)} "
         f"ON DUPLICATE KEY UPDATE "
         f"MatchDateLocal  = VALUES(MatchDateLocal), "
+        f"homeTeam        = VALUES(homeTeam), "
+        f"awayTeam        = VALUES(awayTeam), "
         f"homeScore       = COALESCE(VALUES(homeScore),    homeScore), "
         f"awayScore       = COALESCE(VALUES(awayScore),    awayScore), "
         f"homeScoreET     = COALESCE(VALUES(homeScoreET),  homeScoreET), "
@@ -167,5 +169,118 @@ def insert_match_metadata(matches: list[dict]) -> int:
     except Exception as e:
         conn.rollback()
         raise e
+    finally:
+        conn.close()
+
+
+PREDICTIONS_TABLE = "DailyPredictions"
+
+
+def save_prediction(match: dict, pred: dict, predicted_outcome: str,
+                    scoreline: str, eg_home: float, eg_away: float,
+                    ou_15: float, ou_25: float, is_value_bet: bool = False):
+    """Insert a pre-match prediction into DailyPredictions. Skips if already stored today."""
+    resultado = pred.get("resultado", {})
+    probs = resultado.get("probabilities", {})
+    odds  = resultado.get("odds", {})
+
+    kick_off = match.get("MatchDateLocal")
+    match_date = kick_off.date() if hasattr(kick_off, "date") else kick_off
+
+    sql = f"""
+        INSERT IGNORE INTO {PREDICTIONS_TABLE}
+            (predicted_at, match_date, match_id, league_id, home_team, away_team,
+             p_home, p_draw, p_away, predicted_outcome, scoreline,
+             ou_15, ou_25, eg_home, eg_away,
+             odds_home, odds_draw, odds_away, value_bet)
+        VALUES (%s, %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s,
+                %s, %s, %s, %s,
+                %s, %s, %s, %s)
+    """
+    from datetime import datetime
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sql, (
+                datetime.now(), match_date,
+                match.get("MatchId"), match.get("LeagueId"),
+                match["homeTeam"], match["awayTeam"],
+                probs.get("1"), probs.get("X"), probs.get("2"),
+                predicted_outcome, scoreline,
+                ou_15, ou_25, eg_home, eg_away,
+                odds.get("1"), odds.get("X"), odds.get("2"),
+                int(is_value_bet),
+            ))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def update_prediction_results():
+    """
+    Fill in actual_outcome, actual_goals, and correctness flags for predictions
+    where the match has already been played (Matches table has homeScore != NULL).
+    """
+    sql_update = f"""
+        UPDATE {PREDICTIONS_TABLE} dp
+        JOIN {MATCHES_TABLE} m ON dp.match_id = m.MatchId
+        SET
+            dp.actual_goals   = m.homeScore + m.awayScore,
+            dp.actual_outcome = CASE
+                WHEN m.homeScore > m.awayScore THEN '1'
+                WHEN m.homeScore < m.awayScore THEN '2'
+                ELSE 'X'
+            END,
+            dp.winner_correct = CASE
+                WHEN dp.predicted_outcome = CASE
+                    WHEN m.homeScore > m.awayScore THEN '1'
+                    WHEN m.homeScore < m.awayScore THEN '2'
+                    ELSE 'X'
+                END THEN 1 ELSE 0
+            END,
+            dp.ou15_correct = CASE
+                WHEN (m.homeScore + m.awayScore > 1.5 AND dp.ou_15 >= 50) THEN 1
+                WHEN (m.homeScore + m.awayScore <= 1.5 AND dp.ou_15 < 50) THEN 1
+                ELSE 0
+            END,
+            dp.ou25_correct = CASE
+                WHEN (m.homeScore + m.awayScore > 2.5 AND dp.ou_25 >= 50) THEN 1
+                WHEN (m.homeScore + m.awayScore <= 2.5 AND dp.ou_25 < 50) THEN 1
+                ELSE 0
+            END
+        WHERE dp.actual_outcome IS NULL
+          AND m.homeScore IS NOT NULL
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sql_update)
+            updated = cur.rowcount
+        conn.commit()
+        return updated
+    finally:
+        conn.close()
+
+
+def get_prediction_stats(last_n_days: int = 30) -> dict:
+    """Returns accuracy stats for the last N days from stored predictions."""
+    sql = f"""
+        SELECT
+            COUNT(*) as total,
+            SUM(winner_correct) as winner_ok,
+            SUM(ou15_correct)   as ou15_ok,
+            SUM(ou25_correct)   as ou25_ok,
+            SUM(value_bet)      as value_bets,
+            SUM(CASE WHEN value_bet=1 AND winner_correct=1 THEN 1 ELSE 0 END) as value_ok
+        FROM {PREDICTIONS_TABLE}
+        WHERE actual_outcome IS NOT NULL
+          AND predicted_at >= NOW() - INTERVAL %s DAY
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor(dictionary=True) as cur:
+            cur.execute(sql, (last_n_days,))
+            return cur.fetchone() or {}
     finally:
         conn.close()

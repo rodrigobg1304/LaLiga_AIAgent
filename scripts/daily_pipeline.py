@@ -24,7 +24,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from db_utils import get_connection, MATCHES_TABLE, LEAGUES_TABLE
+from db_utils import (get_connection, MATCHES_TABLE, LEAGUES_TABLE,
+                      save_prediction, update_prediction_results, get_prediction_stats)
 from telegram_notifier import send_message
 
 PREDICTION_URL = os.environ.get("PREDICTION_URL", "http://localhost:8001")
@@ -565,6 +566,16 @@ def format_match_block(match: dict, pred: dict | None,
         f"✈️ {p2:.0f}% ({odds.get('2',0)})"
     )
 
+    # ── Value bet detection ───────────────────────────────────────
+    # Flag when model has strong conviction (>60%) on a single outcome.
+    # The implied model odd is shown so the user can compare with bookmakers.
+    max_prob = max(p1, px, p2)
+    is_value = max_prob >= 60
+    value_line = ""
+    if is_value:
+        best_odd = odds.get(best, 0)
+        value_line = f"🔥 <b>Value:</b> modelo {max_prob:.0f}% → cuota justa {best_odd}"
+
     # ── Scoreline — consistent with predicted 1X2 outcome ────────
     ou_goals = pred.get("over_under_goals", {})
     scoreline = _best_scoreline(ou_goals, p1, px, p2, predicted_outcome=best)
@@ -611,7 +622,11 @@ def format_match_block(match: dict, pred: dict | None,
         block_saves   = f"🧤 <b>Paradas:</b>\n{I}🏠 {sh}  ·  ✈️ {sa}"
         block_corners = f"📐 <b>Córners:</b>\n{I}🏠 {ch}  ·  ✈️ {ca}"
 
-    return "\n\n".join([header, block_1x2, block_score, block_goals, block_saves, block_corners])
+    blocks = [header, block_1x2]
+    if value_line:
+        blocks.append(value_line)
+    blocks += [block_score, block_goals, block_saves, block_corners]
+    return "\n\n".join(blocks)
 
 
 # ─────────────────────────────────────────────
@@ -674,6 +689,11 @@ def run():
             year_cache[lid] = get_current_year_for_league(lid)
         return year_cache[lid]
 
+    # Update results for predictions made in previous days
+    updated = update_prediction_results()
+    if updated:
+        print(f"  Updated results for {updated} past predictions")
+
     # Pre-populate year cache from yesterday's matches
     for m in yesterday:
         _get_year(str(m["LeagueId"]))
@@ -692,11 +712,36 @@ def run():
         year = _get_year(lid)
         home, away = m["homeTeam"], m["awayTeam"]
         print(f"  Predicting: {home} vs {away} (league={lid}, year={year})")
-        predictions[m["MatchId"]] = get_prediction(home, away, lid, year)
+        pred = get_prediction(home, away, lid, year)
+        predictions[m["MatchId"]] = pred
 
         for team in (home, away):
             if team not in team_stats and year:
                 team_stats[team] = get_team_tournament_stats(team, lid, year)
+
+        # Store prediction in DB (skips if already stored today for this match)
+        if pred:
+            try:
+                resultado = pred.get("resultado", {})
+                probs = resultado.get("probabilities", {})
+                p1 = probs.get("1", 0); px = probs.get("X", 0); p2 = probs.get("2", 0)
+                raw_best = resultado.get("predicted", "?")
+                if raw_best != "X" and px > 20 and px > 0.65 * max(p1, p2):
+                    pred_outcome = "X"
+                else:
+                    pred_outcome = raw_best
+                ou = pred.get("over_under_goals", {})
+                ou15 = ou.get("over_1_5", {})
+                ou25 = ou.get("over_2_5", {})
+                ou15_p = ou15.get("over", 0) if isinstance(ou15, dict) else 0
+                ou25_p = ou25.get("over", 0) if isinstance(ou25, dict) else 0
+                eg_h, eg_a = _expected_goals_split(ou, p1, px, p2)
+                score = _best_scoreline(ou, p1, px, p2, predicted_outcome=pred_outcome)
+                is_value = max(p1, px, p2) >= 60
+                save_prediction(m, pred, pred_outcome, score,
+                                eg_h, eg_a, ou15_p, ou25_p, is_value)
+            except Exception as e:
+                print(f"  [db] Error saving prediction: {e}")
 
     message = build_telegram_message(yesterday_block, matches, predictions, team_stats)
     print("\n--- Telegram message ---")
