@@ -5,6 +5,7 @@ import pandas as pd
 import numpy as np
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
@@ -14,7 +15,7 @@ from football_core.db import (run_query, TABLE, get_all_matches_chronological, g
                               get_team_recent_matches_goals, get_h2h_matches, get_proxy_h2h_matches,
                               get_team_stat_average, get_team_multiple_stats_average,
                               get_team_win_rates, get_team_goals_conceded_average, get_team_matches_total_goals,
-                              get_teams_by_league)
+                              get_teams_by_league, get_standings, get_years_by_league, get_upcoming_fixtures)
 from football_core.feature_engineering import build_features_1x2, build_features_qualy, warm_cache
 from tournament_simulation import run_simulation, build_probability_matrix
 
@@ -37,6 +38,9 @@ from football_core.constants import (
     SAVES_THRESHOLDS,
     CORNERS_THRESHOLDS
 )
+
+# Domestic leagues exposed to the web frontend (excludes qualy/WC, which use a different flow)
+WEB_LEAGUES = {k: v for k, v in LEAGUES.items() if k in ("8", "17", "23")}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -803,6 +807,16 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Football Prediction API", version="1.0", lifespan=lifespan)
 
+# Allow the web frontend (e.g. a Lovable app) to call this API from the browser.
+# Override with a comma-separated ALLOWED_ORIGINS env var in production instead of "*".
+_allowed_origins = os.getenv("ALLOWED_ORIGINS", "*")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"] if _allowed_origins == "*" else _allowed_origins.split(","),
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 LEAGUE_MODEL_MAP = {
     "8": "laliga",
     "17": "premier",
@@ -1115,6 +1129,62 @@ def simulate(req: SimulationRequest):
         "n_simulations": req.n_simulations,
         "results": [{"team": t, "win_probability": round(p * 100, 2)} for t, p in sorted_probs],
     }
+
+
+# ─────────────────────────────────────────────
+# DATA ENDPOINTS (para el frontend web: standings, calendario, equipos)
+# ─────────────────────────────────────────────
+
+@app.get("/leagues")
+def leagues():
+    """Ligas domésticas disponibles en el frontend web."""
+    return [{"league_id": k, "name": v} for k, v in WEB_LEAGUES.items()]
+
+
+@app.get("/leagues/{league_id}/seasons")
+def league_seasons(league_id: str):
+    if league_id not in WEB_LEAGUES:
+        raise HTTPException(status_code=404, detail="Liga no soportada")
+    return get_years_by_league(league_id)
+
+
+@app.get("/leagues/{league_id}/teams")
+def league_teams(league_id: str, season: Optional[str] = None):
+    if league_id not in WEB_LEAGUES:
+        raise HTTPException(status_code=404, detail="Liga no soportada")
+    return get_teams_by_league(league_id, season)
+
+
+@app.get("/leagues/{league_id}/standings")
+def league_standings(league_id: str, season: str):
+    if league_id not in WEB_LEAGUES:
+        raise HTTPException(status_code=404, detail="Liga no soportada")
+    try:
+        return get_standings(league_id, season)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error obteniendo clasificación: {e}")
+
+
+@app.get("/leagues/{league_id}/matches")
+def league_matches(league_id: str, season: str):
+    """Partidos jugados de la temporada, con el resultado (goles) de cada uno."""
+    if league_id not in WEB_LEAGUES:
+        raise HTTPException(status_code=404, detail="Liga no soportada")
+    try:
+        return get_league_matches(league_id, season)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error obteniendo partidos: {e}")
+
+
+@app.get("/leagues/{league_id}/fixtures")
+def league_fixtures(league_id: str):
+    """Próximos partidos (sin jugar) de la liga, ordenados por fecha."""
+    if league_id not in WEB_LEAGUES:
+        raise HTTPException(status_code=404, detail="Liga no soportada")
+    try:
+        return get_upcoming_fixtures(league_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error obteniendo calendario: {e}")
 
 
 if __name__ == "__main__":
