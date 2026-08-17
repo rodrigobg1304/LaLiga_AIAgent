@@ -35,10 +35,11 @@ Microservicios que componen el sistema en produccion. Se despliegan con Docker C
 docker compose up --build
 ```
 
-Variables de entorno necesarias en `football_agent/.env`:
+Variables de entorno necesarias en `.env` (raíz del proyecto):
 
 ```env
-OPENAI_API_KEY=sk-...
+ANTHROPIC_API_KEY=sk-ant-...
+MODEL=claude-haiku-4-5-20251001
 DB_HOST=...
 DB_PORT=3306
 DB_DATABASE=...

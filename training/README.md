@@ -154,10 +154,10 @@ El Dockerfile instala `football-core` y copia los scripts. Por defecto ejecuta e
 
 ```bash
 docker build -t football-training -f training/Dockerfile .
-docker run --env-file football_agent/.env football-training
+docker run --env-file .env football-training
 
 # Para ejecutar un script concreto en lugar del scheduler:
-docker run --env-file football_agent/.env football-training python train/train_1x2.py
+docker run --env-file .env football-training python train/train_1x2.py
 ```
 
 ---

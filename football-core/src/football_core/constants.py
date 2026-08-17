@@ -174,7 +174,6 @@ LEAGUE_NAMES_NORMALIZED = {
     'Premier League': 'premier_league',
     'Serie A': 'serie_a',
     'World Cup': 'worldcup',
-    'Qualy WC Europe': 'worldcup_europe',
     'Qualy WC Conmebol': 'worldcup_conmebol',
     'Qualy WC CAF': 'worldcup_caf',
 }

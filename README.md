@@ -35,6 +35,12 @@ LaLiga_AIAgent/
 │       ├── requirements.txt
 │       └── streamlit_app.py              # Dashboard interactivo
 │
+├── crew/                                 # Automatización diaria (proceso APScheduler independiente)
+│   ├── main.py                           # Scheduler: ligas domésticas (Tue/Fri) + World Cup (diario, solo en ventana de torneo)
+│   ├── crew.py                           # Pipeline CrewAI: monitor → detección de jornada → fetch → reentrenamiento
+│   ├── worldcup_crew.py                  # Variante del pipeline para el Mundial
+│   └── tools/                            # Herramientas del crew (MySQL, salud Sofascore, subprocess, training)
+│
 ├── training/                             # Scripts de entrenamiento (batch/CronJob)
 │   ├── Dockerfile
 │   ├── requirements.txt
@@ -52,17 +58,17 @@ LaLiga_AIAgent/
 │   ├── 1x2/production/                   # Modelos de resultado por liga
 │   └── over_under/                       # Modelos Over/Under (goals, saves, corners)
 │
-├── football_agent/                       # Entorno de desarrollo local del agente CrewAI
-│   ├── pyproject.toml
-│   └── src/football_agent/              # Paquete CrewAI (crew, tools, config)
-│
-├── scripts/                              # Utilidades y análisis exploratorio
-│   ├── eda_analysis.py
-│   ├── explore_stats.py
-│   └── create_indexes.py
+├── scripts/                              # Recolección de datos, pipeline diario y utilidades
+│   ├── leagues/                          # Recolección Sofascore por liga doméstica
+│   ├── tournaments/                      # Recolección Sofascore para torneos internacionales
+│   ├── maintenance/                      # Scripts puntuales de mantenimiento/backfill de datos
+│   ├── tests/                            # Tests reales (pytest-style)
+│   ├── collect_and_retrain.py            # Job 09:00 — recolección diaria + reentrenamiento qualy
+│   ├── daily_pipeline.py                 # Job 10:00 — resumen de resultados + predicciones vía Telegram
+│   └── eda_analysis.py
 │
 ├── docker-compose.yml                    # Orquestación local de todos los servicios
-└── football_agent/.env                   # Variables de entorno (no subir a git)
+└── .env                                  # Variables de entorno compartidas (no subir a git)
 ```
 
 ---
@@ -144,9 +150,9 @@ Sistema ELO histórico · Forma reciente · Head-to-head · Estadísticas de tem
 ### Requisitos
 - Docker Desktop con al menos 4 CPUs y 6 GB RAM asignados
 - Base de datos MySQL levantada en el host
-- Fichero `football_agent/.env` configurado
+- Fichero `.env` en la raíz del proyecto configurado
 
-### Variables de entorno (`football_agent/.env`)
+### Variables de entorno (`.env`)
 ```env
 DB_HOST=host.docker.internal
 DB_PORT=3306
@@ -225,3 +231,7 @@ python train_over_under_corners.py --leagues all
 | LaLiga | 8 | 1X2 · Goals · Saves · Corners |
 | Premier League | 17 | 1X2 (Ensemble) · Goals · Saves · Corners |
 | Serie A | 23 | 1X2 · Goals · Saves · Corners |
+| Qualy WC Europe | 11 | 1X2 (qualy) · Goals · Saves · Corners |
+| World Cup | 16 | 1X2 (qualy, compartido) · Goals · Saves · Corners |
+
+Ver `CLAUDE.md` para el detalle de la automatización diaria (recolección de datos, reentrenamiento, pipeline de Telegram) que mantiene estos modelos actualizados.

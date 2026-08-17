@@ -11,7 +11,7 @@ services:
     volumes:
       - ./models:/app/models:ro
     env_file:
-      - football_agent/.env
+      - .env
     environment:
       - MODELS_DIR=/app/models
       - OPENBLAS_NUM_THREADS=1
@@ -30,7 +30,7 @@ services:
     ports:
       - "8002:8002"
     env_file:
-      - football_agent/.env
+      - .env
     environment:
       - PREDICTION_URL=http://prediction-service:8001
     security_opt:
@@ -46,7 +46,7 @@ services:
     ports:
       - "8501:8501"
     env_file:
-      - football_agent/.env
+      - .env
     environment:
       - PREDICTION_URL=http://prediction-service:8001
       - AGENT_URL=http://agent-service:8002
