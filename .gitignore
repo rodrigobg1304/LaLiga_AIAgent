@@ -443,3 +443,6 @@ launchd/
 # OS
 .DS_Store
 exports/
+
+# Runtime state (not source-controlled)
+scripts/state/*.json

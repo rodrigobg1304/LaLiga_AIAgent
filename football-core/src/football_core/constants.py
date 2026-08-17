@@ -32,8 +32,8 @@ LEAGUE_CONFIG = {
 }
 
 # Temporadas para entrenamiento y test
-TRAIN_SEASONS = ['19/20', '20/21', '21/22', '22/23', '23/24', '24/25']
-TEST_SEASONS = ['25/26']
+TRAIN_SEASONS = ['19/20', '20/21', '21/22', '22/23', '23/24', '24/25', '25/26']
+TEST_SEASONS = ['26/27']
 
 # Umbrales Over/Under
 OVER_UNDER_THRESHOLDS = [0.5, 1.5, 2.5, 3.5]
@@ -182,7 +182,7 @@ LEAGUE_NAMES_NORMALIZED = {
 # TEMPORADAS - Splits train/test
 # ═══════════════════════════════════════════════════════════
 
-TEST_SEASON = '25/26'       # Temporada actual para testing
+TEST_SEASON = '26/27'       # Temporada actual para testing
 
 # ═══════════════════════════════════════════════════════════
 # MODELOS - Rutas relativas al MODEL_BASE_DIR

@@ -138,40 +138,57 @@ All services share: football-core (pip package)
 3. Agent service uses CrewAI tools to query DB or call prediction service, then generates natural language responses via Claude
 4. Streamlit calls prediction/agent APIs via HTTP and renders results
 
-## Daily Automation (WC 2026 / active tournaments)
+## Daily Automation
 
-Two launchd agents run daily (replacing cron — launchd catches up if Mac was asleep):
+Four launchd agents (replacing cron — launchd catches up if Mac was asleep, but NOT if the Mac was fully shut down or in deep sleep past `standbydelaylow`; if runs are missed for several days in a row, check `pmset -g | grep powernap` — Power Nap is off by default, so scheduled jobs won't fire while the lid is closed):
 
-| Time | Agent plist | Script | Log |
-|------|-------------|--------|-----|
-| 09:00 | `com.laliga.collect-retrain` | `scripts/collect_and_retrain.py` | `scripts/logs/nightly.log` |
-| 10:00 | `com.laliga.daily-pipeline` | `scripts/daily_pipeline.py` | `scripts/logs/daily_pipeline.log` |
+| Time | Agent plist | Script | Log | Status |
+|------|-------------|--------|-----|--------|
+| always on | `com.laliga.prediction-service` | `services/prediction/predict.py` (uvicorn, port 8001) | `scripts/logs/prediction_service.log` | active |
+| always on | `com.laliga.crew` | `crew/main.py` (internal APScheduler, see below) | `crew/logs/agent_runs.log` | active |
+| 09:00 | `com.laliga.collect-retrain` | `scripts/collect_and_retrain.py` | `scripts/logs/nightly.log` | active |
+| 10:00 | `com.laliga.daily-pipeline` | `scripts/daily_pipeline.py` | `scripts/logs/daily_pipeline.log` | **disabled** (see below) |
 
-**`collect_and_retrain.py` (9:00):** Collects Sofascore stats for completed WC 2026 rounds that have scores in Matches but no stats in Leagues. Retrains qualy models only if new rows were added. Safe to re-run (INSERT IGNORE). WC season id = 58210, league id = 16.
+**`com.laliga.prediction-service` (always on):** Runs the FastAPI prediction service locally (not via Docker) with `RunAtLoad` + `KeepAlive`, so it auto-starts at login and restarts if it crashes. `daily_pipeline.py` calls it at `localhost:8001` (`PREDICTION_URL` in `scripts/.env`) — if this agent isn't loaded, predictions silently fail with "Sin predicción disponible" / HTTP errors in `daily_pipeline.log`, even though the rest of the pipeline runs fine. Uses the `football-agent` conda env (has fastapi/uvicorn/sklearn/xgboost + `football-core` installed editable). Env vars (`DB_HOST=localhost`, `DB_TABLE=Leagues`, etc.) are baked into the plist directly, not read from a `.env` file.
 
-**`daily_pipeline.py` (10:00):**
+**`com.laliga.crew` (always on):** Runs `crew/main.py`, a separate APScheduler-based process (not launchd `StartCalendarInterval`) with two independent internal jobs: domestic leagues (LaLiga/Premier/Serie A) every Tue/Fri at 08:00, active only within the 1 Aug – 1 Jun season window; World Cup 2026 daily at 09:00, active only 11 Jun – 20 Jul 2026 (now outside that window, so it's a no-op until the next tournament). `python crew/main.py --run-now` / `--run-worldcup-now` trigger a run manually.
+
+**`collect_and_retrain.py` (9:00):** Collects Sofascore stats for completed rounds that have scores in `Matches` but no stats in `Leagues`, for **LaLiga (8), Premier League (17), Serie A (23) — season 26/27** (season ids `97268`/`96668`/`95836`) plus the World Cup (league 16, season id 58210, kept for the next tournament cycle). Domestic collection uses `scripts/leagues/collect_leagues.py`; WC uses `scripts/tournaments/collect_tournaments.py`. Safe to re-run (INSERT IGNORE).
+- **WC only:** auto-retrains the qualy models if new stat rows were added, then syncs to `worldcup_all`.
+- **Domestic: does NOT auto-retrain** — per [Critical Rules](#critical-rules), touching `/production` models requires explicit user approval, so the script only logs "new data collected" and retraining is done manually via `training/train_*.py`.
+- Domestic season ids are hardcoded in `DOMESTIC_LEAGUES` in the script — bump them manually each August when a new season starts (`python scripts/leagues/collect_leagues.py --league <id> --list-seasons`).
+- **Round notifications (LaLiga only):** after the collection step, `process_round_notifications()` discovers the next round's fixtures (via `collect_round_fixtures`) and drives `scripts/round_pipeline.py`: sends one Telegram "announce" message per round the first time its fixtures appear (full predictions: winner %, goals O/U, saves, corners, scoreline — same format as the WC daily messages), and one "summary" message (✅/❌ vs actual) once every match in the round has a final score. State (which rounds were already announced/summarized) is tracked in `scripts/state/round_notify_state.json` (gitignored) so re-runs don't duplicate messages. Premier League and Serie A stats are still collected above but intentionally don't get Telegram messages — project decision to keep notifications LaLiga-only for now.
+
+**`daily_pipeline.py` (10:00, currently disabled):**
 1. Refreshes fixtures with placeholder team names (e.g. `w73`, `2a`) from Sofascore.
 2. Fetches last 36h results from DB, calls prediction API for each, shows ✅/❌ vs actual outcome.
 3. Fetches next 24h matches, calls prediction API, builds Telegram message and sends it.
+
+The script itself is league-agnostic — it queries `Matches`/`Leagues` without filtering by `LeagueId`, and `LEAGUE_EMOJI`/`LEAGUE_NAMES` already cover LaLiga/Premier/Serie A — so no code change was needed to support domestic leagues, only data in the DB. It was disabled on 2026-08-11 (World Cup ended, plist moved to `~/Library/LaunchAgents/disabled/`) to stop sending the Telegram message while the 26/27 domestic season data is still being set up. Re-enable once `collect_and_retrain.py` has populated `Matches`/`Leagues` for the new season:
+```bash
+mv ~/Library/LaunchAgents/disabled/com.laliga.daily-pipeline.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/com.laliga.daily-pipeline.plist
+```
 
 **Telegram:** `scripts/telegram_notifier.py`. Reads `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` from env or `scripts/.env`. HTML parse mode. Sends one message per run.
 
 **Scoreline prediction:** Poisson + Dixon-Coles (ρ=−0.10). λ estimated from O/U survival sum; split home/away by 1X2 weights. Best scoreline must be consistent with predicted 1X2 outcome and O/U goals minimum.
 
-**Draw calibration in pipeline:** raw argmax rarely selects X. Override: if `px > 20%` AND `px > 0.65 × max(p1, p2)` → predict draw.
+**Draw calibration in pipeline:** raw argmax rarely selects X. Override: if `px > 20%` AND `px > 0.90 × max(p1, p2)` → predict draw. Applies across all leagues in the message (domestic + international).
 
 **Manage launchd agents:**
 ```bash
 launchctl start com.laliga.collect-retrain   # force run now
-launchctl start com.laliga.daily-pipeline    # force run now
-launchctl list | grep laliga                 # check status
+launchctl start com.laliga.daily-pipeline    # force run now (only works once re-enabled, see above)
+launchctl list | grep laliga                 # check status (PID column: "-" = not running now, that's normal for the two scheduled jobs between runs)
+curl -s localhost:8001/docs -o /dev/null -w "%{http_code}\n"   # verify prediction-service is up
 ```
-Plist files: `~/Library/LaunchAgents/com.laliga.collect-retrain.plist` and `com.laliga.daily-pipeline.plist`.
+Plist files: `~/Library/LaunchAgents/com.laliga.{collect-retrain,daily-pipeline,prediction-service,crew}.plist`. Disabled plists live in `~/Library/LaunchAgents/disabled/`.
 
 ## Code Conventions
 
 - **Function names and variable names in English**, even if comments or docstrings are in Spanish (PEP8 style).
-- DB updates for WC 2026 are automated daily via `collect_and_retrain.py`. Domestic leagues still updated manually.
+- Data collection (stats + scores) for LaLiga, Premier League, Serie A and the World Cup is automated daily via `collect_and_retrain.py` (see [Daily Automation](#daily-automation)). Retraining domestic `/production` models is still manual (`training/train_*.py`) — only the WC qualy models auto-retrain.
 
 ## Critical Rules
 
