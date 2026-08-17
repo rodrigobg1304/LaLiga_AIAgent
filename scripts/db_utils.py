@@ -263,6 +263,24 @@ def update_prediction_results():
         conn.close()
 
 
+def get_stored_prediction_outcome(match_id: int) -> str | None:
+    """Return the calibrated predicted_outcome stored in DailyPredictions for a match."""
+    sql = f"""
+        SELECT predicted_outcome FROM {PREDICTIONS_TABLE}
+        WHERE match_id = %s
+        ORDER BY predicted_at DESC
+        LIMIT 1
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor(dictionary=True) as cur:
+            cur.execute(sql, (match_id,))
+            row = cur.fetchone()
+            return row["predicted_outcome"] if row else None
+    finally:
+        conn.close()
+
+
 def get_prediction_stats(last_n_days: int = 30) -> dict:
     """Returns accuracy stats for the last N days from stored predictions."""
     sql = f"""

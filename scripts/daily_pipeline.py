@@ -25,7 +25,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from db_utils import (get_connection, MATCHES_TABLE, LEAGUES_TABLE,
-                      save_prediction, update_prediction_results, get_prediction_stats)
+                      save_prediction, update_prediction_results, get_prediction_stats,
+                      get_stored_prediction_outcome)
 from telegram_notifier import send_message
 
 PREDICTION_URL = os.environ.get("PREDICTION_URL", "http://localhost:8001")
@@ -198,7 +199,10 @@ def build_yesterday_block(results: list[dict], year_cache: dict) -> str:
         if pred:
             resultado = pred.get("resultado", {})
             probs     = resultado.get("probabilities", {})
-            predicted = resultado.get("predicted", "?")
+            # Use the calibrated outcome stored at prediction time (may differ from
+            # raw model argmax if draw calibration was applied).
+            stored = get_stored_prediction_outcome(m["MatchId"])
+            predicted = stored if stored is not None else resultado.get("predicted", "?")
             best_prob = probs.get(predicted, 0)
             pred_label = OUTCOME_LABELS.get(predicted, predicted)
             actual_label = OUTCOME_LABELS.get(actual_outcome, actual_outcome)
@@ -546,10 +550,11 @@ def format_match_block(match: dict, pred: dict | None,
     p2 = probs.get("2", 0)
 
     # Calibrated outcome: argmax almost never selects X because px < p1 or p2.
-    # WC 2026 draw rate is ~30%; predict X if px > 22% AND px > 0.80*max(p1,p2).
+    # Applies across all leagues in the message (domestic + international).
+    # Override: predict X if px > 20% AND px > 0.90*max(p1,p2).
     if probs:
         raw_best = max(probs, key=lambda k: probs.get(k, 0))
-        if raw_best != "X" and px > 20 and px > 0.65 * max(p1, p2):
+        if raw_best != "X" and px > 20 and px > 0.90 * max(p1, p2):
             best = "X"
         else:
             best = raw_best
@@ -726,7 +731,7 @@ def run():
                 probs = resultado.get("probabilities", {})
                 p1 = probs.get("1", 0); px = probs.get("X", 0); p2 = probs.get("2", 0)
                 raw_best = resultado.get("predicted", "?")
-                if raw_best != "X" and px > 20 and px > 0.65 * max(p1, p2):
+                if raw_best != "X" and px > 20 and px > 0.90 * max(p1, p2):
                     pred_outcome = "X"
                 else:
                     pred_outcome = raw_best
