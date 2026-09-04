@@ -6,6 +6,11 @@ At 10:00 each day:
   2. Show yesterday's results vs predictions
   3. Show upcoming matches (next 24h) with predictions
 
+LaLiga (LeagueId 8) is excluded from steps 2 and 3 — it already gets its own
+per-round announce/summary Telegram messages from round_pipeline.py, driven
+by collect_and_retrain.py at 09:00. Including it here too would duplicate
+those messages.
+
 Schedule:
     0 10 * * * cd /scripts && DB_... python daily_pipeline.py >> logs/daily_pipeline.log 2>&1
 
@@ -123,6 +128,7 @@ def get_yesterday_results() -> list[dict]:
         FROM {MATCHES_TABLE}
         WHERE homeScore IS NOT NULL
           AND MatchDateLocal BETWEEN %s AND %s
+          AND LeagueId != '8'
         ORDER BY MatchDateLocal ASC
     """
     conn = get_connection()
@@ -262,6 +268,7 @@ def get_matches_next_24h() -> list[dict]:
         FROM {MATCHES_TABLE}
         WHERE homeScore IS NULL
           AND MatchDateLocal BETWEEN %s AND %s
+          AND LeagueId != '8'
           AND homeTeam NOT REGEXP '^[0-9]|^[wg][0-9]'
           AND awayTeam  NOT REGEXP '^[0-9]|^[wg][0-9]'
         ORDER BY MatchDateLocal ASC
