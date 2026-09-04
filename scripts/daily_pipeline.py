@@ -440,17 +440,33 @@ def _min_goals_from_ou(ou_goals: dict) -> int:
 
 
 def _best_scoreline(ou_goals: dict, p1: float, px: float, p2: float,
-                    predicted_outcome: str = None) -> str:
+                    predicted_outcome: str = None, close_call_margin: float = 10.0) -> str:
     """
     Returns the most likely scoreline that is consistent with BOTH:
     1. The predicted 1X2 outcome (1=home win, X=draw, 2=away win)
     2. The O/U goals model — scoreline total ≥ min_goals derived from P(>T) ≥ 50%
 
     Fallback: relax the goals constraint if no scoreline satisfies both filters.
+
+    Exception — close calls: when the predicted outcome only barely beats the
+    next-best 1X2 probability (margin < close_call_margin points), forcing
+    consistency discards the scoreline the joint model actually considers most
+    likely (often a draw or a low-scoring result) in favor of one that merely
+    survives the filters, which can look more confident than the match really
+    is (e.g. a 43/37/19 split producing a "2-0" that was only the 4th most
+    likely score overall). In that case we trust the raw distribution instead.
     """
     scores = scoreline_probs(ou_goals, p1, px, p2)
     if not scores:
         return "—"
+
+    probs_by_outcome = {"1": p1, "X": px, "2": p2}
+    if predicted_outcome in probs_by_outcome:
+        others = [v for k, v in probs_by_outcome.items() if k != predicted_outcome]
+        margin = probs_by_outcome[predicted_outcome] - max(others)
+        if margin < close_call_margin:
+            (h, a), _ = scores[0]
+            return f"{h}-{a}"
 
     min_g = _min_goals_from_ou(ou_goals)
 
