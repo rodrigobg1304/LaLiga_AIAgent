@@ -9,6 +9,7 @@ Ahora el flujo es:
   predict.py            → football_core.feature_engineering  (solo features)
 """
 
+import threading
 import time
 import numpy as np
 import pandas as pd
@@ -57,6 +58,8 @@ from football_core.constants import (
 _elo_cache: dict = {}
 _elo_cache_time: float = 0.0
 _ELO_TTL_SECONDS = 3600
+_elo_rebuild_lock = threading.Lock()
+_elo_rebuild_in_progress = False
 
 
 def _build_elo_cache() -> dict:
@@ -90,17 +93,46 @@ def _build_elo_cache() -> dict:
     return elo
 
 
+def _rebuild_elo_cache_async() -> None:
+    """Reconstruye el caché en un hilo aparte y lo publica al terminar.
+
+    Evita que la request que descubre el caché caducado se quede bloqueada
+    esperando la reconstrucción completa (recorre todo el histórico y puede
+    tardar más que el timeout del cliente, sobre todo si la BD está ocupada
+    justo tras una recolección de datos).
+    """
+    global _elo_cache, _elo_cache_time, _elo_rebuild_in_progress
+
+    try:
+        new_cache = _build_elo_cache()
+        _elo_cache = new_cache
+        _elo_cache_time = time.time()
+    finally:
+        with _elo_rebuild_lock:
+            _elo_rebuild_in_progress = False
+
+
 def get_elo(home_team: str, away_team: str) -> dict:
     """Devuelve los Elos actuales desde caché.
 
     El caché usa las claves exactas de la BD (slugs en minúsculas).
     Se normaliza a minúsculas para evitar mismatches por capitalización.
     """
-    global _elo_cache, _elo_cache_time
+    global _elo_cache, _elo_cache_time, _elo_rebuild_in_progress
 
-    if not _elo_cache or (time.time() - _elo_cache_time) > _ELO_TTL_SECONDS:
+    if not _elo_cache:
+        # Caché nunca inicializado (no debería ocurrir si warm_cache() se
+        # llamó al arrancar el servidor): aquí sí hay que esperar, no hay
+        # nada que servir todavía.
         _elo_cache = _build_elo_cache()
         _elo_cache_time = time.time()
+    elif (time.time() - _elo_cache_time) > _ELO_TTL_SECONDS:
+        # Caché caducado pero disponible: se sirve el valor stale al
+        # momento y la reconstrucción se dispara en background.
+        with _elo_rebuild_lock:
+            if not _elo_rebuild_in_progress:
+                _elo_rebuild_in_progress = True
+                threading.Thread(target=_rebuild_elo_cache_async, daemon=True).start()
 
     h = home_team.lower()
     a = away_team.lower()
