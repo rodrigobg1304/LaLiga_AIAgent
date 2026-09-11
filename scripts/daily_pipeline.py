@@ -383,23 +383,35 @@ def _dixon_coles_tau(h: int, a: int, lam_h: float, lam_a: float, rho: float = -0
     return 1.0
 
 
+def _expected_total_goals(ou_goals: dict) -> float:
+    """
+    E[total goals] = P(>0.5) + P(>1.5) + P(>2.5) + P(>3.5) — the standard
+    identity E[X] = sum_k P(X>k) for a non-negative integer X, truncated to
+    the four thresholds the goals O/U model covers. Single source of truth
+    for every place that needs "how many goals is this match expected to
+    have" (scoreline_probs' λ split, _expected_goals_split's displayed
+    figure, and _best_scoreline's target total) so they can never disagree
+    with each other.
+    """
+    return sum(
+        (v.get("over", 0) / 100 if isinstance(v, dict) else float(v))
+        for v in ou_goals.values()
+    )
+
+
 def scoreline_probs(ou_goals: dict, p1: float, px: float, p2: float,
                     max_goals: int = 5, rho: float = -0.10) -> list[tuple[int, int, float]]:
     """
     Returns top scorelines sorted by probability (descending).
 
-    λ_total is estimated from the sum of O/U survival probabilities:
-        E[total] = P(>0.5) + P(>1.5) + P(>2.5) + P(>3.5)
-    Then split into home/away using 1X2 weights.
+    λ_total is estimated from the sum of O/U survival probabilities (see
+    _expected_total_goals), then split into home/away using 1X2 weights.
     Dixon-Coles correction applied for h,a ∈ {0,1}.
     """
     if not ou_goals:
         return []
 
-    e_total = sum(
-        (v.get("over", 0) / 100 if isinstance(v, dict) else float(v))
-        for v in ou_goals.values()
-    )
+    e_total = _expected_total_goals(ou_goals)
     if e_total <= 0:
         return []
 
@@ -420,55 +432,44 @@ def scoreline_probs(ou_goals: dict, p1: float, px: float, p2: float,
     return sorted(normalized.items(), key=lambda x: x[1], reverse=True)
 
 
-def _min_goals_from_ou(ou_goals: dict) -> int:
-    """
-    Returns the minimum total goals the scoreline must have, derived from the
-    highest O/U threshold where over-probability >= 50%.
-
-    E.g. if P(>1.5) = 68% and P(>2.5) = 42%  → min_goals = 2
-         if P(>2.5) = 55% and P(>3.5) = 28%  → min_goals = 3
-         if P(>0.5) = 91% and P(>1.5) = 45%  → min_goals = 1
-    """
-    best_threshold = -1.0
-    for key, val in ou_goals.items():
-        over_pct = val.get("over", 0) if isinstance(val, dict) else val * 100
-        if over_pct >= 50:
-            t = _key_to_float(key)
-            if t > best_threshold:
-                best_threshold = t
-    return int(best_threshold) + 1 if best_threshold >= 0 else 0
-
-
 def _best_scoreline(ou_goals: dict, p1: float, px: float, p2: float,
-                    predicted_outcome: str = None, close_call_margin: float = 10.0) -> str:
+                    predicted_outcome: str = None) -> str:
     """
-    Returns the most likely scoreline that is consistent with BOTH:
-    1. The predicted 1X2 outcome (1=home win, X=draw, 2=away win)
-    2. The O/U goals model — scoreline total ≥ min_goals derived from P(>T) ≥ 50%
+    Returns the most likely scoreline consistent with BOTH:
+    1. The predicted 1X2 outcome (1=home win, X=draw, 2=away win).
+    2. The same expected total goals (_expected_total_goals) that drives
+       the displayed O/U percentages and the "~X.X expected goals" figure
+       elsewhere in the message — so the scoreline's total always matches
+       what those already say, rather than being picked independently.
 
-    Fallback: relax the goals constraint if no scoreline satisfies both filters.
+    Two earlier versions got this wrong in opposite directions:
+    - A goals-minimum floor (total >= highest O/U threshold crossing 50%)
+      systematically inflated the total — real matches never came out as
+      0-0/1-0/0-1, and it once picked a demonstrably *less* likely score
+      (4-0, the 4th most likely) over a more likely one (3-0) just because
+      the more likely one didn't clear the floor.
+    - Removing that floor with no replacement swung the other way: the
+      single highest-probability cell of an unevenly-split Poisson pair
+      structurally favors a low total (whichever side has λ<1 keeps landing
+      on 0 as its individual mode), so predicted totals came out well below
+      the league's actual scoring average even though the model's own
+      expected-goals figure was reasonable — e.g. a match with e_total=2.6
+      (matching real ~2.5-3 goals/game) still got argmaxed down to a 1-goal
+      "1-0", plus for close 1X2 calls it skipped outcome-consistency
+      entirely, producing combinations like "Home favorite" + "0-0" + "Over
+      1.5 (60%)" that flatly contradicted each other.
 
-    Exception — close calls: when the predicted outcome only barely beats the
-    next-best 1X2 probability (margin < close_call_margin points), forcing
-    consistency discards the scoreline the joint model actually considers most
-    likely (often a draw or a low-scoring result) in favor of one that merely
-    survives the filters, which can look more confident than the match really
-    is (e.g. a 43/37/19 split producing a "2-0" that was only the 4th most
-    likely score overall). In that case we trust the raw distribution instead.
+    Anchoring the total to round(e_total) — not just "the argmax's total,
+    whatever it happens to be" — keeps the pick statistically grounded (it's
+    still the model's top cell, just restricted to totals matching its own
+    goals estimate) while guaranteeing every number in the message tells the
+    same story. Falls back to the best outcome-consistent cell of any total
+    when no cell matches exactly (e.g. a draw whose target total is odd —
+    h==a forces an even total, so no exact match can exist).
     """
     scores = scoreline_probs(ou_goals, p1, px, p2)
     if not scores:
         return "—"
-
-    probs_by_outcome = {"1": p1, "X": px, "2": p2}
-    if predicted_outcome in probs_by_outcome:
-        others = [v for k, v in probs_by_outcome.items() if k != predicted_outcome]
-        margin = probs_by_outcome[predicted_outcome] - max(others)
-        if margin < close_call_margin:
-            (h, a), _ = scores[0]
-            return f"{h}-{a}"
-
-    min_g = _min_goals_from_ou(ou_goals)
 
     def outcome_ok(h, a):
         if predicted_outcome == "1":
@@ -479,14 +480,14 @@ def _best_scoreline(ou_goals: dict, p1: float, px: float, p2: float,
             return h == a
         return True
 
-    # Primary filter: match outcome AND goals minimum
-    filtered = [(s, p) for s, p in scores if outcome_ok(s[0], s[1]) and s[0] + s[1] >= min_g]
+    consistent = [(s, p) for s, p in scores if outcome_ok(s[0], s[1])]
+    if not consistent:
+        consistent = scores
 
-    # Fallback 1: only outcome filter (drop goals constraint)
-    if not filtered:
-        filtered = [(s, p) for s, p in scores if outcome_ok(s[0], s[1])]
+    target_total = round(_expected_total_goals(ou_goals))
+    on_target = [(s, p) for s, p in consistent if s[0] + s[1] == target_total]
 
-    (h, a), _ = (filtered[0] if filtered else scores[0])
+    (h, a), _ = (on_target[0] if on_target else consistent[0])
     return f"{h}-{a}"
 
 
@@ -536,10 +537,7 @@ def _top2_ou(ou_data: dict, multiplier: float = 1.0) -> str:
 
 
 def _expected_goals_split(ou_goals: dict, p1: float, px: float, p2: float) -> tuple[float, float]:
-    total = sum(
-        (v.get("over", 0) / 100 if isinstance(v, dict) else v)
-        for v in ou_goals.values()
-    )
+    total = _expected_total_goals(ou_goals)
     denom = p1 + px + p2 or 1
     home_share = (p1 + 0.45 * px) / denom
     return round(total * home_share, 1), round(total * (1 - home_share), 1)

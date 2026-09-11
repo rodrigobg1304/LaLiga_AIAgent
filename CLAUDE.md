@@ -172,7 +172,7 @@ launchctl load ~/Library/LaunchAgents/com.laliga.daily-pipeline.plist
 
 **Telegram:** `scripts/telegram_notifier.py`. Reads `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` from env or `scripts/.env`. HTML parse mode. Sends one message per run.
 
-**Scoreline prediction:** Poisson + Dixon-Coles (ρ=−0.10). λ estimated from O/U survival sum; split home/away by 1X2 weights. Best scoreline must be consistent with predicted 1X2 outcome and O/U goals minimum.
+**Scoreline prediction:** Poisson + Dixon-Coles (ρ=−0.10). λ estimated from O/U survival sum; split home/away by 1X2 weights. Best scoreline is the joint distribution's top cell consistent with the predicted 1X2 outcome (no separate goals-minimum floor — an earlier version forced total goals ≥ the highest O/U threshold crossing 50%, but that discarded genuinely more likely low-scoring picks like 1-0 in favor of a merely-consistent 2-0, which is why 0-0/1-0/0-1 and real blowouts never appeared; removed 2026-09-11).
 
 **Draw calibration in pipeline:** raw argmax rarely selects X. Override: if `px > 20%` AND `px > 0.90 × max(p1, p2)` → predict draw. Applies across all leagues in the message (domestic + international).
 
