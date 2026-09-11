@@ -1,46 +1,46 @@
 {
   "over_0_5": {
     "threshold": 0.5,
-    "test_accuracy": 0.9289473684210526,
-    "test_auc": 0.7345504144370999,
-    "test_f1": 0.9631650750341064,
-    "test_precision": 0.9289473684210526,
+    "test_accuracy": 0.9333333333333333,
+    "test_auc": 0.7857142857142857,
+    "test_f1": 0.9655172413793104,
+    "test_precision": 0.9333333333333333,
     "test_recall": 1.0,
-    "positive_rate_train": 0.9460526315789474,
-    "positive_rate_test": 0.9289473684210526,
-    "trained_at": "2026-06-15T18:21:13.148748"
+    "positive_rate_train": 0.943609022556391,
+    "positive_rate_test": 0.9333333333333333,
+    "trained_at": "2026-09-11T10:31:47.311910"
   },
   "over_1_5": {
     "threshold": 1.5,
-    "test_accuracy": 0.8,
-    "test_auc": 0.710125,
-    "test_f1": 0.887240356083086,
-    "test_precision": 0.7994652406417112,
-    "test_recall": 0.9966666666666667,
-    "positive_rate_train": 0.7890350877192982,
-    "positive_rate_test": 0.7894736842105263,
-    "trained_at": "2026-06-15T18:21:17.671595"
+    "test_accuracy": 0.7666666666666667,
+    "test_auc": 0.5590062111801242,
+    "test_f1": 0.8679245283018868,
+    "test_precision": 0.7666666666666667,
+    "test_recall": 1.0,
+    "positive_rate_train": 0.7890977443609023,
+    "positive_rate_test": 0.7666666666666667,
+    "trained_at": "2026-09-11T10:31:53.555189"
   },
   "over_2_5": {
     "threshold": 2.5,
-    "test_accuracy": 0.6342105263157894,
-    "test_auc": 0.6799854500685527,
-    "test_f1": 0.6789838337182448,
-    "test_precision": 0.65625,
-    "test_recall": 0.7033492822966507,
+    "test_accuracy": 0.5333333333333333,
+    "test_auc": 0.6622222222222222,
+    "test_f1": 0.631578947368421,
+    "test_precision": 0.5217391304347826,
+    "test_recall": 0.8,
     "positive_rate_train": 0.55,
-    "positive_rate_test": 0.55,
-    "trained_at": "2026-06-15T18:21:22.740412"
+    "positive_rate_test": 0.5,
+    "trained_at": "2026-09-11T10:31:59.395744"
   },
   "over_3_5": {
     "threshold": 3.5,
-    "test_accuracy": 0.7131578947368421,
-    "test_auc": 0.6717047930283224,
-    "test_f1": 0.2684563758389262,
-    "test_precision": 0.4878048780487805,
-    "test_recall": 0.18518518518518517,
-    "positive_rate_train": 0.3285087719298246,
-    "positive_rate_test": 0.28421052631578947,
-    "trained_at": "2026-06-15T18:21:24.222649"
+    "test_accuracy": 0.7666666666666667,
+    "test_auc": 0.73,
+    "test_f1": 0.46153846153846156,
+    "test_precision": 1.0,
+    "test_recall": 0.3,
+    "positive_rate_train": 0.32218045112781957,
+    "positive_rate_test": 0.3333333333333333,
+    "trained_at": "2026-09-11T10:32:01.165146"
   }
 }

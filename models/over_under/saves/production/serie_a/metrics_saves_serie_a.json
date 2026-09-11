@@ -1,79 +1,79 @@
 {
   "over_0_5": {
     "threshold": 0.5,
-    "test_accuracy": 0.9144736842105263,
-    "test_auc": 0.5872053126729385,
-    "test_f1": 0.9553264604810997,
-    "test_precision": 0.9144736842105263,
+    "test_accuracy": 0.95,
+    "test_auc": 0.6666666666666667,
+    "test_f1": 0.9743589743589743,
+    "test_precision": 0.95,
     "test_recall": 1.0,
-    "positive_rate_train": 0.9192628345765687,
-    "positive_rate_test": 0.9144736842105263,
-    "trained_at": "2026-06-15T19:31:21.867794"
+    "positive_rate_train": 0.9185784129371944,
+    "positive_rate_test": 0.95,
+    "trained_at": "2026-09-11T12:01:17.398078"
   },
   "over_1_5": {
     "threshold": 1.5,
-    "test_accuracy": 0.7394736842105263,
-    "test_auc": 0.6028187870893038,
-    "test_f1": 0.85,
-    "test_precision": 0.7420634920634921,
-    "test_recall": 0.9946808510638298,
-    "positive_rate_train": 0.7439666520403686,
-    "positive_rate_test": 0.7421052631578947,
-    "trained_at": "2026-06-15T19:31:26.915473"
+    "test_accuracy": 0.85,
+    "test_auc": 0.5370370370370371,
+    "test_f1": 0.918918918918919,
+    "test_precision": 0.85,
+    "test_recall": 1.0,
+    "positive_rate_train": 0.743700639338097,
+    "positive_rate_test": 0.85,
+    "trained_at": "2026-09-11T12:01:24.509330"
   },
   "over_2_5": {
     "threshold": 2.5,
-    "test_accuracy": 0.5381578947368421,
-    "test_auc": 0.6066274238227147,
-    "test_f1": 0.656891495601173,
-    "test_precision": 0.5225505443234837,
-    "test_recall": 0.8842105263157894,
-    "positive_rate_train": 0.5300570425625274,
-    "positive_rate_test": 0.5,
-    "trained_at": "2026-06-15T19:31:32.318307"
+    "test_accuracy": 0.5666666666666667,
+    "test_auc": 0.6565714285714286,
+    "test_f1": 0.6829268292682927,
+    "test_precision": 0.5957446808510638,
+    "test_recall": 0.8,
+    "positive_rate_train": 0.5257615644979315,
+    "positive_rate_test": 0.5833333333333334,
+    "trained_at": "2026-09-11T12:01:27.119472"
   },
   "over_3_5": {
     "threshold": 3.5,
-    "test_accuracy": 0.6934210526315789,
-    "test_auc": 0.6412929286348348,
-    "test_f1": 0.0,
-    "test_precision": 0.0,
-    "test_recall": 0.0,
-    "positive_rate_train": 0.33589293549802546,
-    "positive_rate_test": 0.30657894736842106,
-    "trained_at": "2026-06-15T19:31:34.296977"
+    "test_accuracy": 0.55,
+    "test_auc": 0.7527901785714286,
+    "test_f1": 0.12903225806451613,
+    "test_precision": 0.6666666666666666,
+    "test_recall": 0.07142857142857142,
+    "positive_rate_train": 0.3317036479879654,
+    "positive_rate_test": 0.4666666666666667,
+    "trained_at": "2026-09-11T12:01:29.590808"
   },
   "over_4_5": {
     "threshold": 4.5,
-    "test_accuracy": 0.825,
-    "test_auc": 0.6912196759842189,
+    "test_accuracy": 0.7833333333333333,
+    "test_auc": 0.7013093289689034,
     "test_f1": 0.0,
     "test_precision": 0.0,
     "test_recall": 0.0,
-    "positive_rate_train": 0.19416410706450196,
-    "positive_rate_test": 0.175,
-    "trained_at": "2026-06-15T19:31:36.248411"
+    "positive_rate_train": 0.19142534787514104,
+    "positive_rate_test": 0.21666666666666667,
+    "trained_at": "2026-09-11T12:01:32.037763"
   },
   "over_5_5": {
     "threshold": 5.5,
-    "test_accuracy": 0.9078947368421053,
-    "test_auc": 0.684544513457557,
+    "test_accuracy": 0.9166666666666666,
+    "test_auc": 0.5909090909090909,
     "test_f1": 0.0,
     "test_precision": 0.0,
     "test_recall": 0.0,
-    "positive_rate_train": 0.10816147433084686,
-    "positive_rate_test": 0.09210526315789473,
-    "trained_at": "2026-06-15T19:31:38.222872"
+    "positive_rate_train": 0.10586686724332456,
+    "positive_rate_test": 0.08333333333333333,
+    "trained_at": "2026-09-11T12:01:34.557092"
   },
   "over_6_5": {
     "threshold": 6.5,
-    "test_accuracy": 0.9539473684210527,
-    "test_auc": 0.5988571428571429,
+    "test_accuracy": 0.95,
+    "test_auc": 0.5555555555555555,
     "test_f1": 0.0,
     "test_precision": 0.0,
     "test_recall": 0.0,
-    "positive_rate_train": 0.05726195699868363,
-    "positive_rate_test": 0.046052631578947366,
-    "trained_at": "2026-06-15T19:31:40.110885"
+    "positive_rate_train": 0.05566002256487401,
+    "positive_rate_test": 0.05,
+    "trained_at": "2026-09-11T12:01:37.022599"
   }
 }
