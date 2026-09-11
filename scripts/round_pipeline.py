@@ -101,11 +101,17 @@ def _send_chunked(messages: list[str]) -> bool:
 # Announce
 # ─────────────────────────────────────────────
 
-def build_and_send_announcement(league_id: str, season_id: int, round_id: str, year: str) -> bool:
-    matches = get_round_matches(league_id, season_id, round_id)
+def build_and_send_announcement(league_id: str, season_id: int, round_id: str, year: str,
+                                  matches: list[dict] | None = None) -> list:
+    """Builds and sends the full-round announce message (all matches, one
+    announcement). `matches` lets a caller pass an already-fetched round
+    instead of re-querying it. Returns the list of MatchIds actually sent
+    (empty list on failure/no matches)."""
+    if matches is None:
+        matches = get_round_matches(league_id, season_id, round_id)
     if not matches:
         print(f"  No matches found for league={league_id} season={season_id} round={round_id}")
-        return False
+        return []
 
     emoji = LEAGUE_EMOJI.get(league_id, "⚽")
     name = LEAGUE_NAMES.get(league_id, f"Liga {league_id}")
@@ -142,8 +148,8 @@ def build_and_send_announcement(league_id: str, season_id: int, round_id: str, y
                 print(f"  [db] Error saving prediction: {e}")
 
     messages = _chunk_blocks(blocks, header)
-    print(f"  Sending {len(messages)} message(s) for {name} — Jornada {round_id}")
-    return _send_chunked(messages)
+    print(f"  Sending {len(messages)} message(s) for {name} — Jornada {round_id} ({len(matches)} partido(s))")
+    return [m["MatchId"] for m in matches] if _send_chunked(messages) else []
 
 
 # ─────────────────────────────────────────────

@@ -279,7 +279,8 @@ def retrain_qualy():
 
 # ── Per-league processing ─────────────────────────────────────────
 
-def process_domestic_league(league_id: int, season_id: int, year: str, name: str) -> int:
+def process_domestic_league(league_id: int, season_id: int, year: str, name: str) -> tuple[int, str | None]:
+    """Returns (new_stat_rows, latest_fully_stated_round_or_None)."""
     log(f"-- {name} (season {year}) --")
 
     discover_next_round_fixtures(league_id, season_id)
@@ -292,19 +293,95 @@ def process_domestic_league(league_id: int, season_id: int, year: str, name: str
     log(f"  Completed rounds in Matches table: {completed_rounds}")
 
     total_new = 0
+    fully_stated_rounds = []
     for rnd in completed_rounds:
         n_stats     = count_stats_for_round(league_id, year, rnd)
         n_completed = count_completed_in_round(league_id, season_id, rnd)
         if n_stats < n_completed:
             log(f"  Round {rnd}: {n_stats} stats vs {n_completed} completed → collecting")
             total_new += collect_round_domestic(league_id, season_id, rnd)
+            n_stats = count_stats_for_round(league_id, year, rnd)
         else:
             log(f"  Round {rnd}: {n_stats} stats ok, skipping")
+        if n_stats >= n_completed and n_completed > 0:
+            fully_stated_rounds.append(rnd)
 
     log(f"  {name}: {total_new} new stat rows")
-    if total_new > 0:
-        log(f"  {name}: new data collected — retrain manually with training/train_*.py when ready")
-    return total_new
+    latest = max(fully_stated_rounds, key=int) if fully_stated_rounds else None
+    return total_new, latest
+
+
+# ── Step 2b: Auto-retrain trigger (all domestic leagues, all-or-nothing) ──
+
+RETRAIN_STATE_FILE = SCRIPTS_DIR / "state" / "retrain_state.json"
+
+
+def _load_retrain_state() -> dict:
+    if RETRAIN_STATE_FILE.exists():
+        return json.loads(RETRAIN_STATE_FILE.read_text())
+    return {}
+
+
+def _save_retrain_state(state: dict):
+    RETRAIN_STATE_FILE.parent.mkdir(exist_ok=True)
+    RETRAIN_STATE_FILE.write_text(json.dumps(state, indent=2))
+
+
+def maybe_trigger_retrain(latest_rounds: dict[str, str]):
+    """
+    Launches retrain_and_promote.py in the background once any domestic
+    league's completed round has advanced past what it was last retrained
+    on. Per project decision (2026-09-11) — see that script's docstring for
+    the standing /production-approval exception this represents.
+
+    `latest_rounds` is {league_id_str: latest_fully_stated_round_or_None}
+    for all three domestic leagues (collected after processing each one),
+    since training always covers all three at once (train_1x2.py /
+    train_xgboost.py have no per-league filter) — so a single retrain run
+    updates every league's "last retrained" marker together, rather than
+    each league re-triggering the whole cycle separately for data the
+    others already picked up.
+    """
+    state = _load_retrain_state()
+
+    advanced = {
+        lid: rnd for lid, rnd in latest_rounds.items()
+        if rnd is not None and state.get(lid, {}).get("last_retrained_round") != rnd
+    }
+    if not advanced:
+        return
+
+    lock = state.get("_lock")
+    if lock and lock.get("pid"):
+        try:
+            os.kill(lock["pid"], 0)
+            running = True
+        except (ProcessLookupError, PermissionError):
+            running = False
+        if running:
+            log(f"  Auto-retrain: {advanced} advanced, but a run (pid={lock['pid']}, "
+                f"triggered by {lock.get('trigger')}) is already in progress — deferring")
+            return
+        log(f"  Stale retrain lock (pid={lock['pid']} no longer running) — clearing")
+        state.pop("_lock", None)
+        _save_retrain_state(state)
+
+    trigger_lid, trigger_round = next(iter(advanced.items()))
+    trigger_name = dict((str(l), n) for l, _, _, n in DOMESTIC_LEAGUES).get(trigger_lid, trigger_lid)
+    rounds_arg = ",".join(f"{lid}:{rnd}" for lid, rnd in latest_rounds.items() if rnd is not None)
+
+    log(f"  Auto-retrain: {trigger_name} round {trigger_round} fully collected — "
+        f"launching background retrain for all domestic leagues ({rounds_arg})")
+    log_path = SCRIPTS_DIR / "logs" / "retrain_promote.log"
+    log_path.parent.mkdir(exist_ok=True)
+    with log_path.open("a") as logf:
+        subprocess.Popen(
+            [sys.executable, "retrain_and_promote.py",
+             "--round", f"{trigger_lid}:{trigger_round}",
+             "--rounds", rounds_arg],
+            cwd=str(SCRIPTS_DIR), stdout=logf, stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
 
 
 def process_world_cup() -> int:
@@ -355,10 +432,11 @@ def process_round_notifications(league_id: int, season_id: int, year: str) -> No
     has a final score). Idempotent — tracked in
     scripts/state/round_notify_state.json so re-runs don't re-send.
 
-    Announce state is tracked per MATCH, not per round: a round can contain
-    a fixture moved up well ahead of the rest (an "adelanto"), in which case
-    only that match is announced when its own 24h window arrives, and the
-    remaining fixtures get announced later, separately, when theirs does.
+    Announce state is tracked per ROUND, not per match: the whole round is
+    sent in a single message as soon as its earliest kickoff is within 24h —
+    project decision (2026-09-11) so a reader gets the full round's
+    predictions at once instead of it trickling in over several days as
+    each match's own 24h window arrives.
     """
     from round_pipeline import get_round_matches, build_and_send_announcement, build_and_send_summary
 
@@ -366,14 +444,7 @@ def process_round_notifications(league_id: int, season_id: int, year: str) -> No
     log(f"-- Round notifications: league {lid} --")
 
     state = _load_notify_state()
-    league_state = state.setdefault(lid, {"announced_matches": [], "summarized": []})
-    if "announced" in league_state and "announced_matches" not in league_state:
-        # Legacy per-round state from before match-level tracking. Starting
-        # this empty is safe: those rounds' kickoffs are already in the past,
-        # so the "stale" branch below marks their matches done on the first
-        # run without re-sending anything. Old "announced" list kept as-is
-        # for reference/debugging.
-        league_state.setdefault("announced_matches", [])
+    league_state = state.setdefault(lid, {"announced": [], "summarized": []})
 
     # Fixtures for the next round are already discovered by
     # process_domestic_league() earlier in run(); calling it again here is
@@ -393,45 +464,35 @@ def process_round_notifications(league_id: int, season_id: int, year: str) -> No
         conn.close()
 
     now = datetime.now()
-    announced_ids = set(league_state["announced_matches"])
     for rnd in rounds:
+        if rnd in league_state["announced"]:
+            continue
+
         matches = get_round_matches(lid, season_id, rnd)
         if not matches:
             continue
 
-        pending = [m for m in matches if m["MatchId"] not in announced_ids]
-        if pending:
-            due_now = []       # within the next 24h — announce this run
-            stale = []         # kickoff already passed, never announced — skip silently
-            for m in pending:
-                kickoff = m["MatchDateLocal"]
-                if kickoff is None:
-                    continue
-                if kickoff < now:
-                    stale.append(m)
-                elif kickoff - now <= timedelta(hours=24):
-                    due_now.append(m)
-                # else: >24h away — leave pending for a future run
+        kickoffs = [m["MatchDateLocal"] for m in matches if m["MatchDateLocal"] is not None]
+        if not kickoffs:
+            continue
 
-            if stale:
-                log(f"  Round {rnd}: {len(stale)} match(es) kickoff already passed without being "
-                    f"announced — skipping (marking done)")
-                announced_ids.update(m["MatchId"] for m in stale)
-                league_state["announced_matches"] = sorted(announced_ids)
+        earliest = min(kickoffs)
+        if earliest < now:
+            # First kickoff already passed without ever being announced (e.g. a round
+            # that predates this notification logic) — sending a "preview" for a match
+            # that already happened makes no sense, so just mark it done silently.
+            log(f"  Round {rnd}: first kickoff already passed without being announced — "
+                f"skipping (marking done)")
+            league_state["announced"].append(rnd)
+            _save_notify_state(state)
+        elif earliest - now <= timedelta(hours=24):
+            log(f"  Round {rnd}: first kickoff within 24h — sending full round announcement "
+                f"({len(matches)} partidos)")
+            sent_ids = build_and_send_announcement(lid, season_id, rnd, year, matches=matches)
+            if sent_ids:
+                league_state["announced"].append(rnd)
                 _save_notify_state(state)
-
-            if due_now:
-                # Show a fraction whenever this isn't the whole round in one shot —
-                # avoids guessing whether the isolated match(es) are an early
-                # "adelanto" or a postponed fixture trailing behind the rest.
-                note = f" ({len(due_now)}/{len(matches)})" if len(due_now) < len(matches) else ""
-                log(f"  Round {rnd}: {len(due_now)}/{len(matches)} match(es) start within 24h{note} — "
-                    f"sending announcement")
-                sent_ids = build_and_send_announcement(lid, season_id, rnd, year, matches=due_now, subset_note=note)
-                if sent_ids:
-                    announced_ids.update(sent_ids)
-                    league_state["announced_matches"] = sorted(announced_ids)
-                    _save_notify_state(state)
+        # else: >24h to the first kickoff — leave pending for a future run
 
         all_played = all(m["homeScore"] is not None for m in matches)
         if all_played and rnd not in league_state["summarized"]:
@@ -446,8 +507,11 @@ def process_round_notifications(league_id: int, season_id: int, year: str) -> No
 def run():
     log("=== Nightly collect & retrain started ===")
 
+    latest_rounds = {}
     for league_id, season_id, year, name in DOMESTIC_LEAGUES:
-        process_domestic_league(league_id, season_id, year, name)
+        _, latest = process_domestic_league(league_id, season_id, year, name)
+        latest_rounds[str(league_id)] = latest
+    maybe_trigger_retrain(latest_rounds)
 
     process_world_cup()
 
