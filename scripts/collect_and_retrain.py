@@ -3,19 +3,22 @@ Nightly data collection + conditional retrain.
 
 Runs at ~23:30 each day:
   1. Domestic leagues (LaLiga, Premier League, Serie A — season 26/27):
-       Refreshes scores, collects stats for completed rounds. Does NOT
-       retrain — domestic /production models are retrained manually
-       (see training/train_*.py) per project convention.
+       Discovers the next round's fixtures (so a new round enters the
+       Matches table before any of its games have finished — otherwise
+       stats collection never sees it), refreshes scores, and collects
+       stats for completed rounds. Does NOT retrain — domestic
+       /production models are retrained manually (see training/train_*.py)
+       per project convention.
   2. World Cup 2026 (league 16): same steps, plus auto-retrain of the
        qualy models if new stat rows were collected (kept from the WC
        cycle; will simply find nothing to do once the tournament data
        is no longer changing).
-  3. LaLiga round notifications (Telegram): discovers the next round's
-       fixtures, sends a one-off "announce" message (full predictions)
-       the first time a round appears, and a "summary" message
-       (✅/❌ vs actual) once every match in a round has a final score.
-       LaLiga only, per project decision — Premier/Serie A stats are
-       still collected above but don't get Telegram messages.
+  3. LaLiga round notifications (Telegram): sends a one-off "announce"
+       message (full predictions) the first time a round's fixtures are
+       within 24h of kickoff, and a "summary" message (✅/❌ vs actual)
+       once every match in a round has a final score. LaLiga only, per
+       project decision — Premier/Serie A fixtures/stats are still
+       collected in step 1 above but don't get Telegram messages.
   4. Updates DailyPredictions results (winner_correct, ou_correct, etc.)
      across all leagues.
 
@@ -62,7 +65,48 @@ def log(msg: str):
     print(f"[{datetime.now():%Y-%m-%d %H:%M}] {msg}")
 
 
-# ── Step 0: Refresh scores for finished-but-unscored matches ────
+# ── Step 0a: Discover next round's fixtures ──────────────────────
+
+def discover_next_round_fixtures(league_id: int, season_id: int) -> int:
+    """
+    Finds the next round (max known round + 1) and inserts its fixtures
+    into Matches if Sofascore has published them yet (no-op — empty list —
+    otherwise). Without this, a new round never enters the Matches table
+    until something else happens to pull it in (kickoffs land as
+    homeScore=NULL rows only once refresh_finished_match_scores/collection
+    already know about the round), so completed-round detection and stats
+    collection silently stall on it. Safe to re-run (insert_match_metadata
+    uses INSERT IGNORE / COALESCE).
+    Returns the number of fixtures found (0 if not published yet).
+    """
+    from sofascore_client import collect_round_fixtures
+
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f"""
+                SELECT MAX(CAST(Round AS SIGNED)) FROM {MATCHES_TABLE}
+                WHERE LeagueId=%s AND SeasonId=%s
+            """, (league_id, season_id))
+            row = cur.fetchone()
+            max_round = row[0] if row and row[0] else 0
+    finally:
+        conn.close()
+
+    next_round = max_round + 1
+    try:
+        fixtures = collect_round_fixtures(league_id, season_id, next_round)
+    except Exception as e:
+        log(f"  Round {next_round}: could not fetch fixtures yet ({e})")
+        return 0
+
+    if fixtures:
+        insert_match_metadata(fixtures)
+        log(f"  Round {next_round}: fixtures collected ({len(fixtures)} matches)")
+    return len(fixtures)
+
+
+# ── Step 0b: Refresh scores for finished-but-unscored matches ────
 
 def refresh_finished_match_scores(league_id: int, season_id: int) -> list[str]:
     """
@@ -238,6 +282,8 @@ def retrain_qualy():
 def process_domestic_league(league_id: int, season_id: int, year: str, name: str) -> int:
     log(f"-- {name} (season {year}) --")
 
+    discover_next_round_fixtures(league_id, season_id)
+
     refreshed = refresh_finished_match_scores(league_id, season_id)
     if refreshed:
         log(f"  Scores refreshed for rounds: {refreshed}")
@@ -304,42 +350,36 @@ def _save_notify_state(state: dict):
 
 def process_round_notifications(league_id: int, season_id: int, year: str) -> None:
     """
-    Discovers the next round's fixtures and sends the two Telegram
-    lifecycle messages per round (announce once fixtures appear,
-    summary once every match has a final score). Idempotent — tracked
-    in scripts/state/round_notify_state.json so re-runs don't re-send.
+    Sends the two Telegram lifecycle messages per round (announce once a
+    round's fixtures are within 24h of kickoff, summary once every match
+    has a final score). Idempotent — tracked in
+    scripts/state/round_notify_state.json so re-runs don't re-send.
+
+    Announce state is tracked per MATCH, not per round: a round can contain
+    a fixture moved up well ahead of the rest (an "adelanto"), in which case
+    only that match is announced when its own 24h window arrives, and the
+    remaining fixtures get announced later, separately, when theirs does.
     """
-    from sofascore_client import collect_round_fixtures
     from round_pipeline import get_round_matches, build_and_send_announcement, build_and_send_summary
 
     lid = str(league_id)
     log(f"-- Round notifications: league {lid} --")
 
     state = _load_notify_state()
-    league_state = state.setdefault(lid, {"announced": [], "summarized": []})
+    league_state = state.setdefault(lid, {"announced_matches": [], "summarized": []})
+    if "announced" in league_state and "announced_matches" not in league_state:
+        # Legacy per-round state from before match-level tracking. Starting
+        # this empty is safe: those rounds' kickoffs are already in the past,
+        # so the "stale" branch below marks their matches done on the first
+        # run without re-sending anything. Old "announced" list kept as-is
+        # for reference/debugging.
+        league_state.setdefault("announced_matches", [])
 
-    conn = get_connection()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(f"""
-                SELECT MAX(CAST(Round AS SIGNED)) FROM {MATCHES_TABLE}
-                WHERE LeagueId=%s AND SeasonId=%s
-            """, (league_id, season_id))
-            row = cur.fetchone()
-            max_round = row[0] if row and row[0] else 0
-    finally:
-        conn.close()
-
-    # Try to pull in the next round's fixtures (no-op if Sofascore hasn't
-    # published them yet — collect_round_fixtures returns an empty list).
-    next_round = max_round + 1
-    try:
-        fixtures = collect_round_fixtures(league_id, season_id, next_round)
-        if fixtures:
-            insert_match_metadata(fixtures)
-            log(f"  Round {next_round}: fixtures collected ({len(fixtures)} matches)")
-    except Exception as e:
-        log(f"  Round {next_round}: could not fetch fixtures yet ({e})")
+    # Fixtures for the next round are already discovered by
+    # process_domestic_league() earlier in run(); calling it again here is
+    # cheap (idempotent, INSERT IGNORE) and keeps this function safe to call
+    # standalone.
+    discover_next_round_fixtures(league_id, season_id)
 
     conn = get_connection()
     try:
@@ -352,16 +392,46 @@ def process_round_notifications(league_id: int, season_id: int, year: str) -> No
     finally:
         conn.close()
 
+    now = datetime.now()
+    announced_ids = set(league_state["announced_matches"])
     for rnd in rounds:
         matches = get_round_matches(lid, season_id, rnd)
         if not matches:
             continue
 
-        if rnd not in league_state["announced"]:
-            log(f"  Round {rnd}: sending announcement")
-            if build_and_send_announcement(lid, season_id, rnd, year):
-                league_state["announced"].append(rnd)
+        pending = [m for m in matches if m["MatchId"] not in announced_ids]
+        if pending:
+            due_now = []       # within the next 24h — announce this run
+            stale = []         # kickoff already passed, never announced — skip silently
+            for m in pending:
+                kickoff = m["MatchDateLocal"]
+                if kickoff is None:
+                    continue
+                if kickoff < now:
+                    stale.append(m)
+                elif kickoff - now <= timedelta(hours=24):
+                    due_now.append(m)
+                # else: >24h away — leave pending for a future run
+
+            if stale:
+                log(f"  Round {rnd}: {len(stale)} match(es) kickoff already passed without being "
+                    f"announced — skipping (marking done)")
+                announced_ids.update(m["MatchId"] for m in stale)
+                league_state["announced_matches"] = sorted(announced_ids)
                 _save_notify_state(state)
+
+            if due_now:
+                # Show a fraction whenever this isn't the whole round in one shot —
+                # avoids guessing whether the isolated match(es) are an early
+                # "adelanto" or a postponed fixture trailing behind the rest.
+                note = f" ({len(due_now)}/{len(matches)})" if len(due_now) < len(matches) else ""
+                log(f"  Round {rnd}: {len(due_now)}/{len(matches)} match(es) start within 24h{note} — "
+                    f"sending announcement")
+                sent_ids = build_and_send_announcement(lid, season_id, rnd, year, matches=due_now, subset_note=note)
+                if sent_ids:
+                    announced_ids.update(sent_ids)
+                    league_state["announced_matches"] = sorted(announced_ids)
+                    _save_notify_state(state)
 
         all_played = all(m["homeScore"] is not None for m in matches)
         if all_played and rnd not in league_state["summarized"]:
