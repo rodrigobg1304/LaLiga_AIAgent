@@ -30,6 +30,7 @@ import os
 import re
 import sys
 import math
+import random
 import requests
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -405,14 +406,29 @@ def _expected_total_goals(ou_goals: dict) -> float:
     )
 
 
+def _home_share(p1: float, px: float, p2: float) -> float:
+    """
+    Fraction of expected total goals assigned to the home side, from the
+    1X2 weights. Single source of truth for both the displayed expected-
+    goals split (_expected_goals_split) and the scoreline sampler
+    (scoreline_probs), so they can never disagree. Deliberately uncapped:
+    a big favorite (e.g. an 80% home win probability) genuinely should be
+    able to come back 3-0 or 4-1 — that lopsidedness is exactly what a
+    real favorite's goal difference looks like, so it's left alone rather
+    than artificially evened out.
+    """
+    denom = p1 + px + p2 or 100.0
+    return (p1 + 0.45 * px) / denom
+
+
 def scoreline_probs(ou_goals: dict, p1: float, px: float, p2: float,
                     max_goals: int = 5, rho: float = -0.10) -> list[tuple[int, int, float]]:
     """
     Returns top scorelines sorted by probability (descending).
 
     λ_total is estimated from the sum of O/U survival probabilities (see
-    _expected_total_goals), then split into home/away using 1X2 weights.
-    Dixon-Coles correction applied for h,a ∈ {0,1}.
+    _expected_total_goals), then split into home/away using 1X2 weights
+    (_home_share). Dixon-Coles correction applied for h,a ∈ {0,1}.
     """
     if not ou_goals:
         return []
@@ -421,8 +437,7 @@ def scoreline_probs(ou_goals: dict, p1: float, px: float, p2: float,
     if e_total <= 0:
         return []
 
-    denom = p1 + px + p2 or 100.0
-    home_share = (p1 + 0.45 * px) / denom
+    home_share = _home_share(p1, px, p2)
     lam_h = max(e_total * home_share,       0.05)
     lam_a = max(e_total * (1 - home_share), 0.05)
 
@@ -439,39 +454,40 @@ def scoreline_probs(ou_goals: dict, p1: float, px: float, p2: float,
 
 
 def _best_scoreline(ou_goals: dict, p1: float, px: float, p2: float,
-                    predicted_outcome: str = None) -> str:
+                    predicted_outcome: str = None, rng: "random.Random | None" = None) -> str:
     """
-    Returns the most likely scoreline consistent with BOTH:
-    1. The predicted 1X2 outcome (1=home win, X=draw, 2=away win).
-    2. The same expected total goals (_expected_total_goals) that drives
-       the displayed O/U percentages and the "~X.X expected goals" figure
-       elsewhere in the message — so the scoreline's total always matches
-       what those already say, rather than being picked independently.
+    Samples a scoreline from the joint Poisson+Dixon-Coles distribution
+    (scoreline_probs), weighted by each cell's actual probability and
+    restricted to cells consistent with the predicted 1X2 outcome
+    (1=home win, X=draw, 2=away win).
 
-    Two earlier versions got this wrong in opposite directions:
+    Three earlier versions all picked a single fixed cell (argmax) instead
+    of sampling, and each broke in a different way:
     - A goals-minimum floor (total >= highest O/U threshold crossing 50%)
-      systematically inflated the total — real matches never came out as
-      0-0/1-0/0-1, and it once picked a demonstrably *less* likely score
-      (4-0, the 4th most likely) over a more likely one (3-0) just because
+      systematically inflated the total — it once picked a demonstrably
+      *less* likely score (4-0) over a more likely one (3-0) just because
       the more likely one didn't clear the floor.
     - Removing that floor with no replacement swung the other way: the
       single highest-probability cell of an unevenly-split Poisson pair
-      structurally favors a low total (whichever side has λ<1 keeps landing
-      on 0 as its individual mode), so predicted totals came out well below
-      the league's actual scoring average even though the model's own
-      expected-goals figure was reasonable — e.g. a match with e_total=2.6
-      (matching real ~2.5-3 goals/game) still got argmaxed down to a 1-goal
-      "1-0", plus for close 1X2 calls it skipped outcome-consistency
-      entirely, producing combinations like "Home favorite" + "0-0" + "Over
-      1.5 (60%)" that flatly contradicted each other.
+      structurally favors a low total, so predicted totals came out below
+      the model's own expected-goals figure (e.g. e_total=2.6 argmaxed down
+      to "1-0"), and for close 1X2 calls it skipped outcome-consistency
+      entirely (predicting a "Home favorite" alongside a "0-0" scoreline).
+    - Anchoring the total to round(e_total) fixed both of those, but any
+      win prediction (h≠a) whose target total has only one integer split
+      (e.g. total=2 with h>a can only be 2-0) was then *always* a clean
+      sheet, no matter how close the real match was — every such match
+      came back identical. Patching that with "scan upward for a BTTS
+      cell" just swapped one fixed answer (2-0) for another (2-1), still a
+      monoculture, and it overrode cases that should legitimately have
+      stayed a clean sheet.
 
-    Anchoring the total to round(e_total) — not just "the argmax's total,
-    whatever it happens to be" — keeps the pick statistically grounded (it's
-    still the model's top cell, just restricted to totals matching its own
-    goals estimate) while guaranteeing every number in the message tells the
-    same story. Falls back to the best outcome-consistent cell of any total
-    when no cell matches exactly (e.g. a draw whose target total is odd —
-    h==a forces an even total, so no exact match can exist).
+    A fixed cell — by any rule — always repeats the same shape for
+    similar inputs, because it throws away the rest of the distribution.
+    Sampling keeps the whole distribution: low-scoring, BTTS, and blowout
+    results (3-0, 4-1, even 0-4 for a big underdog beating expectations)
+    all stay possible, each showing up with roughly its true relative
+    frequency instead of one number winning every single time.
     """
     scores = scoreline_probs(ou_goals, p1, px, p2)
     if not scores:
@@ -490,10 +506,9 @@ def _best_scoreline(ou_goals: dict, p1: float, px: float, p2: float,
     if not consistent:
         consistent = scores
 
-    target_total = round(_expected_total_goals(ou_goals))
-    on_target = [(s, p) for s, p in consistent if s[0] + s[1] == target_total]
-
-    (h, a), _ = (on_target[0] if on_target else consistent[0])
+    cells, weights = zip(*consistent)
+    rng = rng or random
+    h, a = rng.choices(cells, weights=weights, k=1)[0]
     return f"{h}-{a}"
 
 
@@ -544,8 +559,7 @@ def _top2_ou(ou_data: dict, multiplier: float = 1.0) -> str:
 
 def _expected_goals_split(ou_goals: dict, p1: float, px: float, p2: float) -> tuple[float, float]:
     total = _expected_total_goals(ou_goals)
-    denom = p1 + px + p2 or 1
-    home_share = (p1 + 0.45 * px) / denom
+    home_share = _home_share(p1, px, p2)
     return round(total * home_share, 1), round(total * (1 - home_share), 1)
 
 
