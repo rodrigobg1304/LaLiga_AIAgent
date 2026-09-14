@@ -11,6 +11,12 @@ per-round announce/summary Telegram messages from round_pipeline.py, driven
 by collect_and_retrain.py at 09:00. Including it here too would duplicate
 those messages.
 
+Premier League (17) and Serie A (23) are also excluded — project decision
+(2026-09-14): Telegram predictions should only ever be sent for LaLiga.
+Those two leagues' data is still collected/trained on as usual, just never
+surfaced here. That leaves this script effectively only covering
+Qualy/World Cup leagues (11, 16, 1, 27) if it's ever re-enabled.
+
 Schedule:
     0 10 * * * cd /scripts && DB_... python daily_pipeline.py >> logs/daily_pipeline.log 2>&1
 
@@ -128,7 +134,7 @@ def get_yesterday_results() -> list[dict]:
         FROM {MATCHES_TABLE}
         WHERE homeScore IS NOT NULL
           AND MatchDateLocal BETWEEN %s AND %s
-          AND LeagueId != '8'
+          AND LeagueId NOT IN ('8', '17', '23')
         ORDER BY MatchDateLocal ASC
     """
     conn = get_connection()
@@ -268,7 +274,7 @@ def get_matches_next_24h() -> list[dict]:
         FROM {MATCHES_TABLE}
         WHERE homeScore IS NULL
           AND MatchDateLocal BETWEEN %s AND %s
-          AND LeagueId != '8'
+          AND LeagueId NOT IN ('8', '17', '23')
           AND homeTeam NOT REGEXP '^[0-9]|^[wg][0-9]'
           AND awayTeam  NOT REGEXP '^[0-9]|^[wg][0-9]'
         ORDER BY MatchDateLocal ASC

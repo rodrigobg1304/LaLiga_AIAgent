@@ -1,7 +1,8 @@
 """
 Nightly data collection + conditional retrain.
 
-Runs at ~23:30 each day:
+Runs at 09:00 each day (com.laliga.collect-retrain, launchd StartCalendarInterval —
+NOT the "~23:30 crontab" this docstring used to claim, stale since the move off cron):
   1. Domestic leagues (LaLiga, Premier League, Serie A — season 26/27):
        Discovers the next round's fixtures (so a new round enters the
        Matches table before any of its games have finished — otherwise
@@ -22,8 +23,8 @@ Runs at ~23:30 each day:
   4. Updates DailyPredictions results (winner_correct, ou_correct, etc.)
      across all leagues.
 
-Schedule (add to crontab):
-    30 23 * * * cd /path/to/scripts && python collect_and_retrain.py >> logs/nightly.log 2>&1
+Schedule: ~/Library/LaunchAgents/com.laliga.collect-retrain.plist (09:00 daily).
+Force a run now: launchctl start com.laliga.collect-retrain
 
 Required env vars: DB_*, PREDICTION_URL, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
 (same as daily_pipeline.py / round_pipeline.py)
